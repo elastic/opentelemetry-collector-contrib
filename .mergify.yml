@@ -41,6 +41,22 @@ pull_request_rules:
         message: |
           This pull request has not been merged yet. Could you please review and merge it @{{ assignee | join(', @') }}? 🙏
 
+  - name: backport patches to 8.18 branch
+    conditions:
+      - merged
+      - label=backport-8.18
+    actions:
+      backport:
+        branches:
+          - "8.18"
+  - name: backport patches to 9.0 branch
+    conditions:
+      - merged
+      - label=backport-9.0
+    actions:
+      backport:
+        branches:
+          - "9.0"
   - name: backport patches to 9.1 branch
     conditions:
       - merged
