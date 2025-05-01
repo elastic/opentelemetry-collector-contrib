@@ -1,0 +1,75 @@
+defaults:
+  actions:
+    backport:
+      title: "[{{ destination_branch }}] (backport #{{ number }}) {{ title }}"
+      assignees:
+        - "{{ author }}"
+      labels:
+        - "backport"
+
+pull_request_rules:
+  - name: self-assign PRs
+    conditions:
+      - -merged
+      - -closed
+      - "#assignee=0"
+    actions:
+      assign:
+        add_users:
+          - "{{ author }}"
+
+  - name: delete upstream branch for mergify backports
+    conditions:
+      - or:
+        - merged
+        - closed
+      - and:
+        - head~=^mergify/bp/.*
+    actions:
+      delete_head_branch:
+
+  - name: notify the backport has not been merged yet
+    conditions:
+      - -merged
+      - -closed
+      - author=mergify[bot]
+      - "#check-success>0"
+      - schedule=Mon-Mon 06:00-10:00[Europe/Paris]
+      - "#assignee>=1"
+    actions:
+      comment:
+        message: |
+          This pull request has not been merged yet. Could you please review and merge it @{{ assignee | join(', @') }}? 🙏
+
+  - name: backport patches to 8.18 branch
+    conditions:
+      - merged
+      - label=backport-8.18
+    actions:
+      backport:
+        branches:
+          - "8.18"
+  - name: backport patches to 8.19 branch
+    conditions:
+      - merged
+      - label=backport-8.19
+    actions:
+      backport:
+        branches:
+          - "8.19"
+  - name: backport patches to 9.0 branch
+    conditions:
+      - merged
+      - label=backport-9.0
+    actions:
+      backport:
+        branches:
+          - "9.0"
+  - name: backport patches to 9.1 branch
+    conditions:
+      - merged
+      - label=backport-9.1
+    actions:
+      backport:
+        branches:
+          - "9.1"
