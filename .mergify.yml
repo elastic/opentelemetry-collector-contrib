@@ -49,6 +49,14 @@ pull_request_rules:
       backport:
         branches:
           - "8.18"
+  - name: backport patches to 8.19 branch
+    conditions:
+      - merged
+      - label=backport-8.19
+    actions:
+      backport:
+        branches:
+          - "8.19"
   - name: backport patches to 9.0 branch
     conditions:
       - merged
