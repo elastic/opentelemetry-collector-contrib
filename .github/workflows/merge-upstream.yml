@@ -1,0 +1,44 @@
+name: Scheduled Merge Upstream
+on:
+  pull_request: ~
+  workflow_dispatch:
+  schedule:
+    - cron: '23 0/3 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  merge_upstream:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get token
+        id: get_token
+        uses: tibdex/github-app-token@3beb63f4bd073e61482598c45c71c1019b59b73a # v2.1.0
+        with:
+          app_id: ${{ secrets.OBS_AUTOMATION_APP_ID }}
+          private_key: ${{ secrets.OBS_AUTOMATION_APP_PEM }}
+          permissions: >-
+            {
+              "contents": "write",
+              "workflows": "write"
+            }
+          repositories: >-
+            ["opentelemetry-collector-contrib"]
+
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ steps.get_token.outputs.token }}
+
+      - uses: elastic/oblt-actions/git/setup@v1
+
+      - name: gh repo sync
+        run: gh repo sync elastic/opentelemetry-collector-contrib --source open-telemetry/opentelemetry-collector-contrib
+        env:
+          GITHUB_TOKEN: ${{ steps.get_token.outputs.token }}
+
+      - if: failure()
+        uses: elastic/oblt-actions/slack/notify-result@v1
+        with:
+          bot-token: ${{ secrets.SLACK_BOT_TOKEN }}
+          channel-id: "#observablt-bots"
