@@ -7,6 +7,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
 )
 
+// StandardFuncs is a helper function to provide quick access to all functions (editors and converters) in this package
 func StandardFuncs[K any]() map[string]ottl.Factory[K] {
 	f := []ottl.Factory[K]{
 		// Editors
@@ -29,6 +30,7 @@ func StandardFuncs[K any]() map[string]ottl.Factory[K] {
 	return ottl.CreateFactoryMap(f...)
 }
 
+// StandardConverters is a helper function to provide quick access to all converters in this package
 func StandardConverters[K any]() map[string]ottl.Factory[K] {
 	return ottl.CreateFactoryMap(converters[K]()...)
 }
@@ -39,6 +41,7 @@ func converters[K any]() []ottl.Factory[K] {
 		NewBase64DecodeFactory[K](),
 		NewDecodeFactory[K](),
 		NewConcatFactory[K](),
+		NewContainsValueFactory[K](),
 		NewConvertCaseFactory[K](),
 		NewConvertAttributesToElementsXMLFactory[K](),
 		NewConvertTextToElementsXMLFactory[K](),
@@ -49,8 +52,11 @@ func converters[K any]() []ottl.Factory[K] {
 		NewExtractGrokPatternsFactory[K](),
 		NewFnvFactory[K](),
 		NewGetXMLFactory[K](),
+		NewHasPrefixFactory[K](),
+		NewHasSuffixFactory[K](),
 		NewHourFactory[K](),
 		NewHoursFactory[K](),
+		NewIndexFactory[K](),
 		NewInsertXMLFactory[K](),
 		NewIntFactory[K](),
 		NewIsBoolFactory[K](),
@@ -107,12 +113,18 @@ func converters[K any]() []ottl.Factory[K] {
 		NewUnixNanoFactory[K](),
 		NewUnixSecondsFactory[K](),
 		NewUUIDFactory[K](),
+		NewUUIDv7Factory[K](),
 		NewURLFactory[K](),
+		NewValuesFactory[K](),
 		NewWeekdayFactory[K](),
 		NewUserAgentFactory[K](),
 		NewAppendFactory[K](),
 		NewYearFactory[K](),
 		NewHexFactory[K](),
 		NewSliceToMapFactory[K](),
+		NewProfileIDFactory[K](),
+		NewParseIntFactory[K](),
+		NewKeysFactory[K](),
+		NewXXH3Factory[K](),
 	}
 }

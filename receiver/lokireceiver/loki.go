@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"sync"
 
@@ -78,7 +79,8 @@ func newLokiReceiver(conf *Config, nextConsumer consumer.Logs, settings receiver
 				handleUnmatchedMethod(resp)
 				return
 			}
-			switch req.Header.Get("Content-Type") {
+			reqContentType, _, _ := mime.ParseMediaType(req.Header.Get("Content-Type"))
+			switch reqContentType {
 			case jsonContentType, pbContentType:
 				handleLogs(resp, req, r)
 			default:
@@ -191,12 +193,12 @@ func (r *lokiReceiver) Shutdown(ctx context.Context) error {
 
 func handleUnmatchedMethod(resp http.ResponseWriter) {
 	status := http.StatusMethodNotAllowed
-	writeResponse(resp, "text/plain", status, []byte(fmt.Sprintf("%v method not allowed, supported: [POST]", status)))
+	writeResponse(resp, "text/plain", status, fmt.Appendf(nil, "%v method not allowed, supported: [POST]", status))
 }
 
 func handleUnmatchedContentType(resp http.ResponseWriter) {
 	status := http.StatusUnsupportedMediaType
-	writeResponse(resp, "text/plain", status, []byte(fmt.Sprintf("%v unsupported media type, supported: [%s, %s]", status, jsonContentType, pbContentType)))
+	writeResponse(resp, "text/plain", status, fmt.Appendf(nil, "%v unsupported media type, supported: [%s, %s]", status, jsonContentType, pbContentType))
 }
 
 func writeResponse(w http.ResponseWriter, contentType string, statusCode int, msg []byte) {

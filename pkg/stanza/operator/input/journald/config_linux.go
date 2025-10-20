@@ -13,7 +13,6 @@ import (
 	"sort"
 	"time"
 
-	jsoniter "github.com/json-iterator/go"
 	"go.opentelemetry.io/collector/component"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/operator"
@@ -49,21 +48,17 @@ func (c Config) Build(set component.TelemetrySettings) (operator.Operator, error
 			// journalctl is an executable that is required for this operator to function
 		},
 		convertMessageBytes: c.ConvertMessageBytes,
-		json:                jsoniter.ConfigFastest,
 	}, nil
 }
 
 func (c Config) buildArgs() ([]string, error) {
 	args := make([]string, 0, 10)
 
-	// Export logs in UTC time
-	args = append(args, "--utc")
-
-	// Export logs as JSON
-	args = append(args, "--output=json")
-
-	// Continue watching logs until cancelled
-	args = append(args, "--follow")
+	args = append(args,
+		"--utc",         // Export logs in UTC time
+		"--output=json", // Export logs as JSON
+		"--follow",      // Continue watching logs until cancelled
+	)
 
 	switch c.StartAt {
 	case "end":
@@ -83,7 +78,7 @@ func (c Config) buildArgs() ([]string, error) {
 
 	args = append(args, "--priority", c.Priority)
 
-	if len(c.Grep) > 0 {
+	if c.Grep != "" {
 		args = append(args, "--grep", c.Grep)
 	}
 
@@ -91,7 +86,7 @@ func (c Config) buildArgs() ([]string, error) {
 		args = append(args, "--dmesg")
 	}
 
-	if len(c.Namespace) > 0 {
+	if c.Namespace != "" {
 		args = append(args, "--namespace", c.Namespace)
 	}
 
@@ -114,6 +109,10 @@ func (c Config) buildArgs() ([]string, error) {
 
 	if c.All {
 		args = append(args, "--all")
+	}
+
+	if c.Merge {
+		args = append(args, "--merge")
 	}
 
 	return args, nil

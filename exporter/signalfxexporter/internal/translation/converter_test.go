@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pmetric"
-	conventions "go.opentelemetry.io/collector/semconv/v1.26.0"
+	conventions "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
@@ -357,7 +357,7 @@ func Test_MetricDataToSignalFxV2(t *testing.T) {
 				res := rm.Resource()
 				res.Attributes().PutStr("k/r0", "vr0")
 				res.Attributes().PutStr("k/r1", "vr1")
-				res.Attributes().PutStr("cloud.provider", conventions.AttributeCloudProviderAWS)
+				res.Attributes().PutStr("cloud.provider", conventions.CloudProviderAWS.Value.AsString())
 				res.Attributes().PutStr("cloud.account.id", "efgh")
 				res.Attributes().PutStr("cloud.region", "us-east")
 
@@ -374,7 +374,7 @@ func Test_MetricDataToSignalFxV2(t *testing.T) {
 					&sfxMetricTypeGauge,
 					maps.MergeRawMaps(labelMap, map[string]any{
 						"cloud_account_id": "efgh",
-						"cloud_provider":   conventions.AttributeCloudProviderAWS,
+						"cloud_provider":   conventions.CloudProviderAWS.Value.AsString(),
 						"cloud_region":     "us-east",
 						"k_r0":             "vr0",
 						"k_r1":             "vr1",
@@ -389,7 +389,7 @@ func Test_MetricDataToSignalFxV2(t *testing.T) {
 				res := rm.Resource()
 				res.Attributes().PutStr("k/r0", "vr0")
 				res.Attributes().PutStr("k/r1", "vr1")
-				res.Attributes().PutStr("cloud.provider", conventions.AttributeCloudProviderAWS)
+				res.Attributes().PutStr("cloud.provider", conventions.CloudProviderAWS.Value.AsString())
 				res.Attributes().PutStr("cloud.account.id", "efgh")
 				res.Attributes().PutStr("cloud.region", "us-east")
 				res.Attributes().PutStr("host.id", "abcd")
@@ -406,7 +406,7 @@ func Test_MetricDataToSignalFxV2(t *testing.T) {
 					"gauge_double_with_dims",
 					&sfxMetricTypeGauge,
 					maps.MergeRawMaps(labelMap, map[string]any{
-						"cloud_provider":   conventions.AttributeCloudProviderAWS,
+						"cloud_provider":   conventions.CloudProviderAWS.Value.AsString(),
 						"cloud_account_id": "efgh",
 						"cloud_region":     "us-east",
 						"host_id":          "abcd",
@@ -424,7 +424,7 @@ func Test_MetricDataToSignalFxV2(t *testing.T) {
 				res := rm.Resource()
 				res.Attributes().PutStr("k/r0", "vr0")
 				res.Attributes().PutStr("k/r1", "vr1")
-				res.Attributes().PutStr("cloud.provider", conventions.AttributeCloudProviderGCP)
+				res.Attributes().PutStr("cloud.provider", conventions.CloudProviderGCP.Value.AsString())
 				res.Attributes().PutStr("host.id", "abcd")
 
 				ilm := rm.ScopeMetrics().AppendEmpty()
@@ -440,7 +440,7 @@ func Test_MetricDataToSignalFxV2(t *testing.T) {
 					&sfxMetricTypeGauge,
 					maps.MergeRawMaps(labelMap, map[string]any{
 						"host_id":        "abcd",
-						"cloud_provider": conventions.AttributeCloudProviderGCP,
+						"cloud_provider": conventions.CloudProviderGCP.Value.AsString(),
 						"k_r0":           "vr0",
 						"k_r1":           "vr1",
 					})),
@@ -454,7 +454,7 @@ func Test_MetricDataToSignalFxV2(t *testing.T) {
 				res := rm.Resource()
 				res.Attributes().PutStr("k/r0", "vr0")
 				res.Attributes().PutStr("k/r1", "vr1")
-				res.Attributes().PutStr("cloud.provider", conventions.AttributeCloudProviderGCP)
+				res.Attributes().PutStr("cloud.provider", conventions.CloudProviderGCP.Value.AsString())
 				res.Attributes().PutStr("host.id", "abcd")
 				res.Attributes().PutStr("cloud.account.id", "efgh")
 
@@ -473,7 +473,7 @@ func Test_MetricDataToSignalFxV2(t *testing.T) {
 						"gcp_id":           "efgh_abcd",
 						"k_r0":             "vr0",
 						"k_r1":             "vr1",
-						"cloud_provider":   conventions.AttributeCloudProviderGCP,
+						"cloud_provider":   conventions.CloudProviderGCP.Value.AsString(),
 						"host_id":          "abcd",
 						"cloud_account_id": "efgh",
 					})),
@@ -1187,7 +1187,7 @@ func TestInvalidNumberOfDimensions(t *testing.T) {
 	m.SetName("valid")
 	dp := m.SetEmptyGauge().DataPoints().AppendEmpty()
 	dp.SetIntValue(123)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		dp.Attributes().PutStr(fmt.Sprint("dim_key_", i), fmt.Sprint("dim_val_", i))
 	}
 	c, err := NewMetricsConverter(logger, nil, nil, nil, "_-.", false, true)
@@ -1208,7 +1208,7 @@ func TestInvalidNumberOfDimensions(t *testing.T) {
 		MetricType: &gaugeType,
 		Dimensions: make([]*sfxpb.Dimension, 0, 37),
 	}
-	for i := 0; i < 37; i++ {
+	for i := range 37 {
 		dpInvalid.Attributes().PutStr(fmt.Sprint("dim_key_", i), fmt.Sprint("dim_val_", i))
 		dpSFX.Dimensions = append(dpSFX.Dimensions, &sfxpb.Dimension{
 			Key:   fmt.Sprint("dim_key_", i),

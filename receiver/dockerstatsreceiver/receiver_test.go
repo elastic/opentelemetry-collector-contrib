@@ -8,7 +8,6 @@
 package dockerstatsreceiver
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -120,6 +119,44 @@ var (
 	}
 )
 
+func TestClientOptions(t *testing.T) {
+	tests := []struct {
+		name        string
+		endpoint    string
+		expectEnv   bool
+		description string
+	}{
+		{
+			name:        "Empty endpoint, DOCKER_HOST set",
+			endpoint:    "",
+			expectEnv:   true,
+			description: "Should append WithHostFromEnv() when Endpoint is empty.",
+		},
+		{
+			name:        "Config endpoint set, DOCKER_HOST ignored",
+			endpoint:    "tcp://config:1234",
+			expectEnv:   false,
+			description: "Should not append WithHostFromEnv() when Endpoint is set.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := &Config{
+				Config: docker.Config{
+					Endpoint: tt.endpoint,
+				},
+			}
+
+			receiver := &metricsReceiver{config: config}
+			opts := receiver.clientOptions()
+
+			// If expectEnv is true, opts should not be empty
+			assert.Equal(t, tt.expectEnv, len(opts) > 0, tt.description)
+		})
+	}
+}
+
 func TestNewReceiver(t *testing.T) {
 	cfg := &Config{
 		ControllerConfig: scraperhelper.ControllerConfig{
@@ -149,11 +186,11 @@ func TestErrorsInStart(t *testing.T) {
 	assert.NotNil(t, recv)
 
 	cfg.Endpoint = "..not/a/valid/endpoint"
-	err := recv.start(context.Background(), componenttest.NewNopHost())
+	err := recv.start(t.Context(), componenttest.NewNopHost())
 	assert.ErrorContains(t, err, "unable to parse docker host")
 
 	cfg.Endpoint = unreachable
-	err = recv.start(context.Background(), componenttest.NewNopHost())
+	err = recv.start(t.Context(), componenttest.NewNopHost())
 	assert.ErrorContains(t, err, "context deadline exceeded")
 }
 
@@ -303,11 +340,11 @@ func TestScrapeV2(t *testing.T) {
 
 			receiver := newMetricsReceiver(
 				receivertest.NewNopSettings(metadata.Type), tc.cfgBuilder.withEndpoint(mockDockerEngine.URL).build())
-			err := receiver.start(context.Background(), componenttest.NewNopHost())
+			err := receiver.start(t.Context(), componenttest.NewNopHost())
 			require.NoError(t, err)
-			defer func() { require.NoError(t, receiver.shutdown(context.Background())) }()
+			defer func() { require.NoError(t, receiver.shutdown(t.Context())) }()
 
-			actualMetrics, err := receiver.scrapeV2(context.Background())
+			actualMetrics, err := receiver.scrapeV2(t.Context())
 			require.NoError(t, err)
 
 			// Uncomment to regenerate 'expected_metrics.yaml' files

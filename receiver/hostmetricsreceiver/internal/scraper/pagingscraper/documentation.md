@@ -16,45 +16,45 @@ metrics:
 
 The number of page faults.
 
-| Unit | Metric Type | Value Type | Aggregation Temporality | Monotonic |
-| ---- | ----------- | ---------- | ----------------------- | --------- |
-| {faults} | Sum | Int | Cumulative | true |
+| Unit | Metric Type | Value Type | Aggregation Temporality | Monotonic | Stability |
+| ---- | ----------- | ---------- | ----------------------- | --------- | --------- |
+| {faults} | Sum | Int | Cumulative | true | development |
 
 #### Attributes
 
-| Name | Description | Values |
-| ---- | ----------- | ------ |
-| type | Type of fault. | Str: ``major``, ``minor`` |
+| Name | Description | Values | Optional |
+| ---- | ----------- | ------ | -------- |
+| type | Type of fault. | Str: ``major``, ``minor`` | false |
 
 ### system.paging.operations
 
 The number of paging operations.
 
-| Unit | Metric Type | Value Type | Aggregation Temporality | Monotonic |
-| ---- | ----------- | ---------- | ----------------------- | --------- |
-| {operations} | Sum | Int | Cumulative | true |
+| Unit | Metric Type | Value Type | Aggregation Temporality | Monotonic | Stability |
+| ---- | ----------- | ---------- | ----------------------- | --------- | --------- |
+| {operations} | Sum | Int | Cumulative | true | development |
 
 #### Attributes
 
-| Name | Description | Values |
-| ---- | ----------- | ------ |
-| direction | Page In or Page Out. | Str: ``page_in``, ``page_out`` |
-| type | Type of fault. | Str: ``major``, ``minor`` |
+| Name | Description | Values | Optional |
+| ---- | ----------- | ------ | -------- |
+| direction | Page In or Page Out. | Str: ``page_in``, ``page_out`` | false |
+| type | Type of fault. | Str: ``major``, ``minor`` | false |
 
 ### system.paging.usage
 
 Swap (unix) or pagefile (windows) usage.
 
-| Unit | Metric Type | Value Type | Aggregation Temporality | Monotonic |
-| ---- | ----------- | ---------- | ----------------------- | --------- |
-| By | Sum | Int | Cumulative | false |
+| Unit | Metric Type | Value Type | Aggregation Temporality | Monotonic | Stability |
+| ---- | ----------- | ---------- | ----------------------- | --------- | --------- |
+| By | Sum | Int | Cumulative | false | development |
 
 #### Attributes
 
-| Name | Description | Values |
-| ---- | ----------- | ------ |
-| device | Name of the page file. | Any Str |
-| state | Breakdown of paging usage by type. | Str: ``cached``, ``free``, ``used`` |
+| Name | Description | Values | Optional |
+| ---- | ----------- | ------ | -------- |
+| device | Name of the page file. | Any Str | false |
+| state | Breakdown of paging usage by type. | Str: ``cached``, ``free``, ``used`` | false |
 
 ## Optional Metrics
 
@@ -70,13 +70,13 @@ metrics:
 
 Swap (unix) or pagefile (windows) utilization.
 
-| Unit | Metric Type | Value Type |
-| ---- | ----------- | ---------- |
-| 1 | Gauge | Double |
+| Unit | Metric Type | Value Type | Stability |
+| ---- | ----------- | ---------- | --------- |
+| 1 | Gauge | Double | development |
 
 #### Attributes
 
-| Name | Description | Values |
-| ---- | ----------- | ------ |
-| device | Name of the page file. | Any Str |
-| state | Breakdown of paging usage by type. | Str: ``cached``, ``free``, ``used`` |
+| Name | Description | Values | Optional |
+| ---- | ----------- | ------ | -------- |
+| device | Name of the page file. | Any Str | false |
+| state | Breakdown of paging usage by type. | Str: ``cached``, ``free``, ``used`` | false |

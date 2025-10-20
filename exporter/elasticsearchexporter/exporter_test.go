@@ -10,12 +10,16 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"net/url"
 	"runtime"
+	"slices"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/elastic/go-docappender/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -24,6 +28,7 @@ import (
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/config/configauth"
 	"go.opentelemetry.io/collector/config/configopaque"
+	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/confmap/xconfmap"
 	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
@@ -127,7 +132,7 @@ func TestExporterLogs(t *testing.T) {
 					body := pcommon.NewValueMap()
 					m := body.Map()
 					s := m.PutEmptySlice("a")
-					for i := 0; i < 2; i++ {
+					for i := range 2 {
 						s.AppendEmpty().SetInt(int64(i))
 					}
 					return body
@@ -211,7 +216,7 @@ func TestExporterLogs(t *testing.T) {
 			cfg.Mapping.Mode = "bodymap"
 		})
 
-		err := exporter.ConsumeLogs(context.Background(), logs)
+		err := exporter.ConsumeLogs(t.Context(), logs)
 		assert.NoError(t, err)
 		rec.WaitItems(1)
 	})
@@ -398,17 +403,20 @@ func TestExporterLogs(t *testing.T) {
 
 	t.Run("publish otel mapping mode", func(t *testing.T) {
 		for _, tc := range []struct {
+			name         string
 			body         pcommon.Value
 			isEvent      bool
 			wantDocument []byte
 		}{
 			{
+				name: "basic",
 				body: func() pcommon.Value {
 					return pcommon.NewValueStr("foo")
 				}(),
 				wantDocument: []byte(`{"@timestamp":"0.0","attributes":{"attr.foo":"attr.foo.value"},"data_stream":{"dataset":"attr.dataset.otel","namespace":"resource.attribute.namespace","type":"logs"},"observed_timestamp":"0.0","resource":{"attributes":{"resource.attr.foo":"resource.attr.foo.value"}},"scope":{},"body":{"text":"foo"}}`),
 			},
 			{
+				name: "map body",
 				body: func() pcommon.Value {
 					vm := pcommon.NewValueMap()
 					m := vm.SetEmptyMap()
@@ -420,6 +428,7 @@ func TestExporterLogs(t *testing.T) {
 				wantDocument: []byte(`{"@timestamp":"0.0","attributes":{"attr.foo":"attr.foo.value"},"data_stream":{"dataset":"attr.dataset.otel","namespace":"resource.attribute.namespace","type":"logs"},"observed_timestamp":"0.0","resource":{"attributes":{"resource.attr.foo":"resource.attr.foo.value"}},"scope":{},"body":{"structured":{"true":true,"false":false,"inner":{"foo":"bar"}}}}`),
 			},
 			{
+				name: "map body event",
 				body: func() pcommon.Value {
 					vm := pcommon.NewValueMap()
 					m := vm.SetEmptyMap()
@@ -432,6 +441,7 @@ func TestExporterLogs(t *testing.T) {
 				wantDocument: []byte(`{"@timestamp":"0.0","attributes":{"attr.foo":"attr.foo.value","event.name":"foo"},"event_name":"foo","data_stream":{"dataset":"attr.dataset.otel","namespace":"resource.attribute.namespace","type":"logs"},"observed_timestamp":"0.0","resource":{"attributes":{"resource.attr.foo":"resource.attr.foo.value"}},"scope":{},"body":{"structured":{"true":true,"false":false,"inner":{"foo":"bar"}}}}`),
 			},
 			{
+				name: "heterogeneous slice body",
 				body: func() pcommon.Value {
 					vs := pcommon.NewValueSlice()
 					s := vs.Slice()
@@ -443,6 +453,7 @@ func TestExporterLogs(t *testing.T) {
 				wantDocument: []byte(`{"@timestamp":"0.0","attributes":{"attr.foo":"attr.foo.value"},"data_stream":{"dataset":"attr.dataset.otel","namespace":"resource.attribute.namespace","type":"logs"},"observed_timestamp":"0.0","resource":{"attributes":{"resource.attr.foo":"resource.attr.foo.value"}},"scope":{},"body":{"structured":{"value":["foo",false,{"foo":"bar"}]}}}`),
 			},
 			{
+				name: "heterogeneous slice body event",
 				body: func() pcommon.Value {
 					vs := pcommon.NewValueSlice()
 					s := vs.Slice()
@@ -455,62 +466,234 @@ func TestExporterLogs(t *testing.T) {
 				wantDocument: []byte(`{"@timestamp":"0.0","attributes":{"attr.foo":"attr.foo.value","event.name":"foo"},"event_name":"foo","data_stream":{"dataset":"attr.dataset.otel","namespace":"resource.attribute.namespace","type":"logs"},"observed_timestamp":"0.0","resource":{"attributes":{"resource.attr.foo":"resource.attr.foo.value"}},"scope":{},"body":{"structured":{"value":["foo",false,{"foo":"bar"}]}}}`),
 			},
 		} {
-			rec := newBulkRecorder()
-			server := newESTestServer(t, func(docs []itemRequest) ([]itemResponse, error) {
-				rec.Record(docs)
-				return itemsAllOK(docs)
+			t.Run(tc.name, func(t *testing.T) {
+				rec := newBulkRecorder()
+				server := newESTestServer(t, func(docs []itemRequest) ([]itemResponse, error) {
+					rec.Record(docs)
+					return itemsAllOK(docs)
+				})
+
+				exporter := newTestLogsExporter(t, server.URL, func(cfg *Config) {
+					cfg.Mapping.Mode = "otel"
+				})
+				recordAttrs := map[string]any{
+					"data_stream.dataset": "attr.dataset",
+					"attr.foo":            "attr.foo.value",
+				}
+				if tc.isEvent {
+					recordAttrs["event.name"] = "foo"
+				}
+				logs := newLogsWithAttributes(
+					recordAttrs,
+					nil,
+					map[string]any{
+						"data_stream.dataset":   "resource.attribute.dataset",
+						"data_stream.namespace": "resource.attribute.namespace",
+						"resource.attr.foo":     "resource.attr.foo.value",
+					},
+				)
+				tc.body.CopyTo(logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0).Body())
+				mustSendLogs(t, exporter, logs)
+
+				expected := []itemRequest{
+					{
+						Action:   []byte(`{"create":{"_index":"logs-attr.dataset.otel-resource.attribute.namespace"}}`),
+						Document: tc.wantDocument,
+					},
+				}
+
+				assertRecordedItems(t, expected, rec, false)
 			})
+		}
+	})
 
-			exporter := newTestLogsExporter(t, server.URL, func(cfg *Config) {
-				cfg.Mapping.Mode = "otel"
+	t.Run("otel mode attribute", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+
+			recordAttrs   map[string]any
+			scopeAttrs    map[string]any
+			resourceAttrs map[string]any
+
+			wantRecordAttrs   string
+			wantScopeAttrs    string
+			wantResourceAttrs string
+		}{
+			{
+				name: "slice value",
+				recordAttrs: map[string]any{
+					"some.record.attribute": []string{"foo", "bar"},
+				},
+				scopeAttrs: map[string]any{
+					"some.scope.attribute": []string{"foo", "bar"},
+				},
+				resourceAttrs: map[string]any{
+					"some.resource.attribute": []string{"foo", "bar"},
+				},
+				wantRecordAttrs:   `{"some.record.attribute":["foo","bar"]}`,
+				wantScopeAttrs:    `{"some.scope.attribute":["foo","bar"]}`,
+				wantResourceAttrs: `{"some.resource.attribute":["foo","bar"]}`,
+			},
+			{
+				// only valid for log attributes https://opentelemetry.io/docs/specs/otel/logs/data-model/#field-attributes
+				// but testing for all attributes anyway
+				name: "map value",
+				recordAttrs: map[string]any{
+					"a.b": map[string]any{
+						"c": "a.b.c",
+						"c.d": map[string]any{
+							"e": "a.b.c.d.e",
+						},
+					},
+				},
+				scopeAttrs: map[string]any{
+					"a.b": map[string]any{
+						"c": "a.b.c",
+						"c.d": map[string]any{
+							"e": "a.b.c.d.e",
+						},
+					},
+				},
+				resourceAttrs: map[string]any{
+					"a.b": map[string]any{
+						"c": "a.b.c",
+						"c.d": map[string]any{
+							"e": "a.b.c.d.e",
+						},
+					},
+				},
+				wantRecordAttrs:   `{"a.b":{"c":"a.b.c","c.d":{"e":"a.b.c.d.e"}}}`,
+				wantScopeAttrs:    `{"a.b":{"c":"a.b.c","c.d":{"e":"a.b.c.d.e"}}}`,
+				wantResourceAttrs: `{"a.b":{"c":"a.b.c","c.d":{"e":"a.b.c.d.e"}}}`,
+			},
+			{
+				name: "key prefix conflict",
+				recordAttrs: map[string]any{
+					"a":   "a",
+					"a.b": "a.b",
+				},
+				scopeAttrs: map[string]any{
+					"a":   "a",
+					"a.b": "a.b",
+				},
+				resourceAttrs: map[string]any{
+					"a":   "a",
+					"a.b": "a.b",
+				},
+				wantRecordAttrs:   `{"a":"a","a.b":"a.b"}`,
+				wantScopeAttrs:    `{"a":"a","a.b":"a.b"}`,
+				wantResourceAttrs: `{"a":"a","a.b":"a.b"}`,
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				rec := newBulkRecorder()
+				server := newESTestServer(t, func(docs []itemRequest) ([]itemResponse, error) {
+					rec.Record(docs)
+					return itemsAllOK(docs)
+				})
+
+				exporter := newTestLogsExporter(t, server.URL, func(cfg *Config) {
+					cfg.Mapping.Mode = "otel"
+				})
+
+				mustSendLogs(t, exporter, newLogsWithAttributes(tc.recordAttrs, tc.scopeAttrs, tc.resourceAttrs))
+
+				rec.WaitItems(1)
+
+				assert.Len(t, rec.Items(), 1)
+				doc := rec.Items()[0].Document
+				assert.JSONEq(t, tc.wantRecordAttrs, gjson.GetBytes(doc, `attributes`).Raw)
+				assert.JSONEq(t, tc.wantScopeAttrs, gjson.GetBytes(doc, `scope.attributes`).Raw)
+				assert.JSONEq(t, tc.wantResourceAttrs, gjson.GetBytes(doc, `resource.attributes`).Raw)
 			})
-			recordAttrs := map[string]any{
-				"data_stream.dataset": "attr.dataset",
-				"attr.foo":            "attr.foo.value",
-			}
-			if tc.isEvent {
-				recordAttrs["event.name"] = "foo"
-			}
-			logs := newLogsWithAttributes(
-				recordAttrs,
-				nil,
-				map[string]any{
-					"data_stream.dataset":   "resource.attribute.dataset",
-					"data_stream.namespace": "resource.attribute.namespace",
-					"resource.attr.foo":     "resource.attr.foo.value",
-				},
-			)
-			tc.body.CopyTo(logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0).Body())
-			mustSendLogs(t, exporter, logs)
+		}
+	})
 
-			expected := []itemRequest{
-				{
-					Action:   []byte(`{"create":{"_index":"logs-attr.dataset.otel-resource.attribute.namespace"}}`),
-					Document: tc.wantDocument,
-				},
-			}
+	t.Run("retry http request batcher", func(t *testing.T) {
+		for _, maxRetries := range []int{0, 1, 11} {
+			t.Run(fmt.Sprintf("max retries %d", maxRetries), func(t *testing.T) {
+				t.Parallel()
+				expectedRetries := maxRetries
+				if maxRetries == 0 {
+					expectedRetries = defaultMaxRetries
+				}
 
-			assertRecordedItems(t, expected, rec, false)
+				var attempts atomic.Int64
+				rec := newBulkRecorder()
+				server := newESTestServer(t, func(_ []itemRequest) ([]itemResponse, error) {
+					// always return error, and assert that the number of attempts is expected, not more, not less.
+					attempts.Add(1)
+					return nil, &httpTestError{status: http.StatusServiceUnavailable, message: "oops"}
+				})
+
+				exporter := newTestLogsExporter(t, server.URL, func(cfg *Config) {
+					cfg.Retry.Enabled = true
+					cfg.Retry.RetryOnStatus = []int{http.StatusServiceUnavailable}
+					cfg.Retry.MaxRetries = maxRetries
+					cfg.Retry.InitialInterval = 1 * time.Millisecond
+					cfg.Retry.MaxInterval = 5 * time.Millisecond
+
+					// use sync flushing
+					cfg.QueueBatchConfig.Enabled = true
+					cfg.QueueBatchConfig.WaitForResult = true
+				})
+
+				logs := plog.NewLogs()
+				resourceLogs := logs.ResourceLogs().AppendEmpty()
+				scopeLogs := resourceLogs.ScopeLogs().AppendEmpty()
+				scopeLogs.LogRecords().AppendEmpty()
+				logs.MarkReadOnly()
+				err := exporter.ConsumeLogs(t.Context(), logs) // as sync bulk indexer is used, retries are finished on return
+				var errFlushFailed docappender.ErrorFlushFailed
+				require.ErrorAs(t, err, &errFlushFailed)
+
+				assert.Equal(t, 0, rec.countItems())
+				assert.Equal(t, int64(expectedRetries+1), attempts.Load()) // initial request + retries
+			})
 		}
 	})
 
 	t.Run("retry http request", func(t *testing.T) {
-		failures := 0
-		rec := newBulkRecorder()
-		server := newESTestServer(t, func(docs []itemRequest) ([]itemResponse, error) {
-			if failures == 0 {
-				failures++
-				return nil, &httpTestError{status: http.StatusTooManyRequests, message: "oops"}
-			}
+		for _, maxRetries := range []int{0, 1, 11} {
+			t.Run(fmt.Sprintf("max retries %d", maxRetries), func(t *testing.T) {
+				t.Parallel()
+				expectedRetries := maxRetries
+				if maxRetries == 0 {
+					expectedRetries = defaultMaxRetries
+				}
 
-			rec.Record(docs)
-			return itemsAllOK(docs)
-		})
+				var attempts atomic.Int64
+				rec := newBulkRecorder()
+				server := newESTestServer(t, func(_ []itemRequest) ([]itemResponse, error) {
+					// always return error, and assert that the number of attempts is expected, not more, not less.
+					attempts.Add(1)
+					return nil, &httpTestError{status: http.StatusServiceUnavailable, message: "oops"}
+				})
 
-		exporter := newTestLogsExporter(t, server.URL)
-		mustSendLogRecords(t, exporter, plog.NewLogRecord())
+				exporter := newTestLogsExporter(t, server.URL, func(cfg *Config) {
+					cfg.Retry.Enabled = true
+					cfg.Retry.RetryOnStatus = []int{http.StatusServiceUnavailable}
+					cfg.Retry.MaxRetries = maxRetries
+					cfg.Retry.InitialInterval = 1 * time.Millisecond
+					cfg.Retry.MaxInterval = 5 * time.Millisecond
 
-		rec.WaitItems(1)
+					// use async indexer
+					cfg.QueueBatchConfig.Enabled = true
+					cfg.QueueBatchConfig.WaitForResult = false
+					cfg.QueueBatchConfig.BlockOnOverflow = false
+				})
+				mustSendLogRecords(t, exporter, plog.NewLogRecord()) // as sync bulk indexer is used, retries are not guaranteed to finish
+
+				assert.Eventually(t, func() bool {
+					return int64(expectedRetries+1) == attempts.Load()
+				}, time.Second, 5*time.Millisecond)
+
+				// assert that it does not retry in async more than expected
+				time.Sleep(20 * time.Millisecond)
+				assert.Equal(t, int64(expectedRetries+1), attempts.Load())
+				assert.Equal(t, 0, rec.countItems())
+			})
+		}
 	})
 
 	t.Run("no retry", func(t *testing.T) {
@@ -609,7 +792,7 @@ func TestExporterLogs(t *testing.T) {
 	})
 
 	t.Run("only retry failed items", func(t *testing.T) {
-		var attempts [3]int
+		var attempts [3]atomic.Int64
 		var wg sync.WaitGroup
 		wg.Add(1)
 
@@ -629,25 +812,24 @@ func TestExporterLogs(t *testing.T) {
 					panic(err)
 				}
 
+				newAttemptCount := attempts[idxInfo.Attributes.Idx].Add(1)
 				if idxInfo.Attributes.Idx == retryIdx {
-					if attempts[retryIdx] == 0 {
+					if newAttemptCount == 1 {
 						resp[i].Status = http.StatusTooManyRequests
 					} else {
 						defer wg.Done()
 					}
 				}
-				attempts[idxInfo.Attributes.Idx]++
 			}
 			return resp, nil
 		})
 
 		exporter := newTestLogsExporter(t, server.URL, func(cfg *Config) {
 			cfg.Mapping.Mode = "otel"
-			cfg.Flush.Interval = 50 * time.Millisecond
 			cfg.Retry.InitialInterval = 1 * time.Millisecond
 			cfg.Retry.MaxInterval = 10 * time.Millisecond
 		})
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			logRecord := plog.NewLogRecord()
 			logRecord.Attributes().PutInt("idx", int64(i))
 			mustSendLogRecords(t, exporter, logRecord)
@@ -655,64 +837,7 @@ func TestExporterLogs(t *testing.T) {
 
 		wg.Wait() // <- this blocks forever if the event is not retried
 
-		assert.Equal(t, [3]int{1, 2, 1}, attempts)
-	})
-
-	t.Run("otel mode attribute array value", func(t *testing.T) {
-		rec := newBulkRecorder()
-		server := newESTestServer(t, func(docs []itemRequest) ([]itemResponse, error) {
-			rec.Record(docs)
-			return itemsAllOK(docs)
-		})
-
-		exporter := newTestLogsExporter(t, server.URL, func(cfg *Config) {
-			cfg.Mapping.Mode = "otel"
-		})
-
-		mustSendLogs(t, exporter, newLogsWithAttributes(map[string]any{
-			"some.record.attribute": []string{"foo", "bar"},
-		}, map[string]any{
-			"some.scope.attribute": []string{"foo", "bar"},
-		}, map[string]any{
-			"some.resource.attribute": []string{"foo", "bar"},
-		}))
-
-		rec.WaitItems(1)
-
-		assert.Len(t, rec.Items(), 1)
-		doc := rec.Items()[0].Document
-		assert.JSONEq(t, `{"some.record.attribute":["foo","bar"]}`, gjson.GetBytes(doc, `attributes`).Raw)
-		assert.JSONEq(t, `{"some.scope.attribute":["foo","bar"]}`, gjson.GetBytes(doc, `scope.attributes`).Raw)
-		assert.JSONEq(t, `{"some.resource.attribute":["foo","bar"]}`, gjson.GetBytes(doc, `resource.attributes`).Raw)
-	})
-
-	t.Run("otel mode attribute key prefix conflict", func(t *testing.T) {
-		rec := newBulkRecorder()
-		server := newESTestServer(t, func(docs []itemRequest) ([]itemResponse, error) {
-			rec.Record(docs)
-			return itemsAllOK(docs)
-		})
-
-		exporter := newTestLogsExporter(t, server.URL, func(cfg *Config) {
-			cfg.Mapping.Mode = "otel"
-		})
-
-		mustSendLogs(t, exporter, newLogsWithAttributes(map[string]any{
-			"a":   "a",
-			"a.b": "a.b",
-		}, map[string]any{
-			"a":   "a",
-			"a.b": "a.b",
-		}, map[string]any{
-			"a":   "a",
-			"a.b": "a.b",
-		}))
-
-		rec.WaitItems(1)
-		doc := rec.Items()[0].Document
-		assert.JSONEq(t, `{"a":"a","a.b":"a.b"}`, gjson.GetBytes(doc, `attributes`).Raw)
-		assert.JSONEq(t, `{"a":"a","a.b":"a.b"}`, gjson.GetBytes(doc, `scope.attributes`).Raw)
-		assert.JSONEq(t, `{"a":"a","a.b":"a.b"}`, gjson.GetBytes(doc, `resource.attributes`).Raw)
+		assert.Equal(t, [3]int64{1, 2, 1}, [3]int64{attempts[0].Load(), attempts[1].Load(), attempts[2].Load()})
 	})
 
 	t.Run("publish logs with dynamic id", func(t *testing.T) {
@@ -745,12 +870,12 @@ func TestExporterLogs(t *testing.T) {
 
 		cfgs := map[string]func(*Config){
 			"async": func(cfg *Config) {
-				cfg.Batcher.enabledSet = false
+				cfg.QueueBatchConfig.WaitForResult = false
+				cfg.QueueBatchConfig.BlockOnOverflow = false
 			},
 			"sync": func(cfg *Config) {
-				cfg.Batcher.enabledSet = true
-				cfg.Batcher.Enabled = true
-				cfg.Batcher.FlushTimeout = 10 * time.Millisecond
+				cfg.QueueBatchConfig.WaitForResult = true
+				cfg.QueueBatchConfig.BlockOnOverflow = false
 			},
 		}
 		for _, tt := range tableTests {
@@ -821,11 +946,12 @@ func TestExporterLogs(t *testing.T) {
 
 		cfgs := map[string]func(*Config){
 			"async": func(cfg *Config) {
-				cfg.Batcher.Enabled = false
+				cfg.QueueBatchConfig.WaitForResult = false
+				cfg.QueueBatchConfig.BlockOnOverflow = false
 			},
 			"sync": func(cfg *Config) {
-				cfg.Batcher.Enabled = true
-				cfg.Batcher.FlushTimeout = 10 * time.Millisecond
+				cfg.QueueBatchConfig.WaitForResult = true
+				cfg.QueueBatchConfig.BlockOnOverflow = false
 			},
 		}
 		for _, tt := range tableTests {
@@ -865,36 +991,6 @@ func TestExporterLogs(t *testing.T) {
 			}
 		}
 	})
-
-	t.Run("otel mode attribute complex value", func(t *testing.T) {
-		rec := newBulkRecorder()
-		server := newESTestServer(t, func(docs []itemRequest) ([]itemResponse, error) {
-			rec.Record(docs)
-			return itemsAllOK(docs)
-		})
-
-		exporter := newTestLogsExporter(t, server.URL, func(cfg *Config) {
-			cfg.Mapping.Mode = "otel"
-		})
-
-		logs := plog.NewLogs()
-		resourceLog := logs.ResourceLogs().AppendEmpty()
-		resourceLog.Resource().Attributes().PutEmptyMap("some.resource.attribute").PutEmptyMap("foo.bar").PutStr("baz", "qux")
-		scopeLog := resourceLog.ScopeLogs().AppendEmpty()
-		scopeLog.Scope().Attributes().PutEmptyMap("some.scope.attribute").PutEmptyMap("foo.bar").PutStr("baz", "qux")
-		logRecord := scopeLog.LogRecords().AppendEmpty()
-		logRecord.Attributes().PutEmptyMap("some.record.attribute").PutEmptyMap("foo.bar").PutStr("baz", "qux")
-
-		mustSendLogs(t, exporter, logs)
-
-		rec.WaitItems(1)
-
-		assert.Len(t, rec.Items(), 1)
-		doc := rec.Items()[0].Document
-		assert.JSONEq(t, `{"some.record.attribute":{"foo.bar":{"baz":"qux"}}}`, gjson.GetBytes(doc, `attributes`).Raw)
-		assert.JSONEq(t, `{"some.scope.attribute":{"foo.bar":{"baz":"qux"}}}`, gjson.GetBytes(doc, `scope.attributes`).Raw)
-		assert.JSONEq(t, `{"some.resource.attribute":{"foo.bar":{"baz":"qux"}}}`, gjson.GetBytes(doc, `resource.attributes`).Raw)
-	})
 }
 
 func TestExporterMetrics(t *testing.T) {
@@ -908,11 +1004,16 @@ func TestExporterMetrics(t *testing.T) {
 		exporter := newTestMetricsExporter(t, server.URL, func(cfg *Config) {
 			cfg.Mapping.Mode = "ecs"
 		})
-		dp := pmetric.NewNumberDataPoint()
-		dp.SetDoubleValue(123.456)
-		dp.SetTimestamp(pcommon.NewTimestampFromTime(time.Now()))
-		mustSendMetricSumDataPoints(t, exporter, dp)
-		mustSendMetricGaugeDataPoints(t, exporter, dp)
+		dpSum := pmetric.NewNumberDataPoint()
+		dpSum.SetDoubleValue(123.456)
+		dpSum.SetTimestamp(pcommon.NewTimestampFromTime(time.Now().Add(-2 * time.Second)))
+		mustSendMetricSumDataPoints(t, exporter, dpSum)
+
+		dpGauge := pmetric.NewNumberDataPoint()
+		dpGauge.SetDoubleValue(123.456)
+		// Keep timestamp different to avoid metric grouping putting them in same doc
+		dpGauge.SetTimestamp(pcommon.NewTimestampFromTime(time.Now().Add(-1 * time.Second)))
+		mustSendMetricGaugeDataPoints(t, exporter, dpGauge)
 
 		rec.WaitItems(2)
 	})
@@ -1084,7 +1185,7 @@ func TestExporterMetrics(t *testing.T) {
 		fooDp.ExplicitBounds().FromRaw([]float64{1.0, 2.0, 3.0})
 		fooDp.BucketCounts().FromRaw([]uint64{1, 2, 3, 4})
 
-		err := exporter.ConsumeMetrics(context.Background(), metrics)
+		err := exporter.ConsumeMetrics(t.Context(), metrics)
 		assert.NoError(t, err)
 	})
 
@@ -1115,7 +1216,7 @@ func TestExporterMetrics(t *testing.T) {
 		fooDp.Negative().SetOffset(1)
 		fooDp.Negative().BucketCounts().FromRaw([]uint64{1, 0, 0, 1})
 
-		err := exporter.ConsumeMetrics(context.Background(), metrics)
+		err := exporter.ConsumeMetrics(t.Context(), metrics)
 		assert.NoError(t, err)
 	})
 
@@ -1154,7 +1255,7 @@ func TestExporterMetrics(t *testing.T) {
 		barOtherDp := barDps.AppendEmpty()
 		barOtherDp.SetDoubleValue(1.0)
 
-		err := exporter.ConsumeMetrics(context.Background(), metrics)
+		err := exporter.ConsumeMetrics(t.Context(), metrics)
 		assert.NoError(t, err)
 
 		expected := []itemRequest{
@@ -1199,13 +1300,45 @@ func TestExporterMetrics(t *testing.T) {
 		fooOtherDp.ExplicitBounds().FromRaw([]float64{4.0, 5.0, 6.0})
 		fooOtherDp.BucketCounts().FromRaw([]uint64{4, 5, 6, 7})
 
-		sumMetric := metricSlice.AppendEmpty()
-		sumMetric.SetName("metric.sum")
-		sumDps := sumMetric.SetEmptySum().DataPoints()
-		sumDp := sumDps.AppendEmpty()
-		sumDp.SetTimestamp(pcommon.NewTimestampFromTime(time.Unix(3600, 0)))
-		sumDp.SetStartTimestamp(pcommon.NewTimestampFromTime(time.Unix(7200, 0)))
-		sumDp.SetDoubleValue(1.5)
+		sumMonotonicCumulative := metricSlice.AppendEmpty()
+		sumMonotonicCumulative.SetName("metric.sum.monotonic.cumulative")
+		sumMonotonicCumulative.SetEmptySum()
+		sumMonotonicCumulative.Sum().SetIsMonotonic(true)
+		sumMonotonicCumulative.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
+		dp := sumMonotonicCumulative.Sum().DataPoints().AppendEmpty()
+		dp.SetTimestamp(pcommon.NewTimestampFromTime(time.Unix(3600, 0)))
+		dp.SetStartTimestamp(pcommon.NewTimestampFromTime(time.Unix(7200, 0)))
+		dp.SetDoubleValue(1.5)
+
+		sumMonotonicDelta := metricSlice.AppendEmpty()
+		sumMonotonicDelta.SetName("metric.sum.monotonic.delta")
+		sumMonotonicDelta.SetEmptySum()
+		sumMonotonicDelta.Sum().SetIsMonotonic(true)
+		sumMonotonicDelta.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityDelta)
+		dp = sumMonotonicDelta.Sum().DataPoints().AppendEmpty()
+		dp.SetTimestamp(pcommon.NewTimestampFromTime(time.Unix(3600, 0)))
+		dp.SetStartTimestamp(pcommon.NewTimestampFromTime(time.Unix(7200, 0)))
+		dp.SetDoubleValue(2.5)
+
+		sumCumulative := metricSlice.AppendEmpty()
+		sumCumulative.SetName("metric.sum.nonmonotonic.cumulative")
+		sumCumulative.SetEmptySum()
+		sumCumulative.Sum().SetIsMonotonic(false)
+		sumCumulative.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
+		dp = sumCumulative.Sum().DataPoints().AppendEmpty()
+		dp.SetTimestamp(pcommon.NewTimestampFromTime(time.Unix(3600, 0)))
+		dp.SetStartTimestamp(pcommon.NewTimestampFromTime(time.Unix(7200, 0)))
+		dp.SetDoubleValue(3.5)
+
+		sumDelta := metricSlice.AppendEmpty()
+		sumDelta.SetName("metric.sum.nonmonotonic.delta")
+		sumDelta.SetEmptySum()
+		sumDelta.Sum().SetIsMonotonic(false)
+		sumDelta.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityDelta)
+		dp = sumDelta.Sum().DataPoints().AppendEmpty()
+		dp.SetTimestamp(pcommon.NewTimestampFromTime(time.Unix(3600, 0)))
+		dp.SetStartTimestamp(pcommon.NewTimestampFromTime(time.Unix(7200, 0)))
+		dp.SetDoubleValue(4.5)
 
 		summaryMetric := metricSlice.AppendEmpty()
 		summaryMetric.SetName("metric.summary")
@@ -1221,51 +1354,92 @@ func TestExporterMetrics(t *testing.T) {
 		expected := []itemRequest{
 			{
 				Action:   []byte(`{"create":{"_index":"metrics-generic.otel-default","dynamic_templates":{"metrics.metric.foo":"histogram"}}}`),
-				Document: []byte(`{"@timestamp":"0.0","data_stream":{"dataset":"generic.otel","namespace":"default","type":"metrics"},"metrics":{"metric.foo":{"counts":[1,2,3,4],"values":[0.5,1.5,2.5,3.0]}},"resource":{},"scope":{},"_metric_names_hash":"f7fdad9f"}`),
+				Document: []byte(`{"@timestamp":0,"data_stream":{"dataset":"generic.otel","namespace":"default","type":"metrics"},"metrics":{"metric.foo":{"counts":[1,2,3,4],"values":[0.5,1.5,2.5,3.0]}},"resource":{},"scope":{},"_metric_names_hash":"b23939f78dc5f649"}`),
 			},
 			{
 				Action:   []byte(`{"create":{"_index":"metrics-generic.otel-default","dynamic_templates":{"metrics.metric.foo":"histogram"}}}`),
-				Document: []byte(`{"@timestamp":"3600000.0","data_stream":{"dataset":"generic.otel","namespace":"default","type":"metrics"},"metrics":{"metric.foo":{"counts":[4,5,6,7],"values":[2.0,4.5,5.5,6.0]}},"resource":{},"scope":{},"_metric_names_hash":"f7fdad9f"}`),
+				Document: []byte(`{"@timestamp":3600000,"data_stream":{"dataset":"generic.otel","namespace":"default","type":"metrics"},"metrics":{"metric.foo":{"counts":[4,5,6,7],"values":[2.0,4.5,5.5,6.0]}},"resource":{},"scope":{},"_metric_names_hash":"b23939f78dc5f649"}`),
 			},
 			{
-				Action:   []byte(`{"create":{"_index":"metrics-generic.otel-default","dynamic_templates":{"metrics.metric.sum":"gauge_double"}}}`),
-				Document: []byte(`{"@timestamp":"3600000.0","data_stream":{"dataset":"generic.otel","namespace":"default","type":"metrics"},"metrics":{"metric.sum":1.5},"resource":{},"scope":{},"start_timestamp":"7200000.0","_metric_names_hash":"6e599000"}`),
+				Action:   []byte(`{"create":{"_index":"metrics-generic.otel-default","dynamic_templates":{"metrics.metric.sum.monotonic.delta":"gauge_double","metrics.metric.sum.nonmonotonic.cumulative":"gauge_double","metrics.metric.sum.nonmonotonic.delta":"gauge_double","metrics.metric.sum.monotonic.cumulative":"counter_double"}}}`),
+				Document: []byte(`{"@timestamp":3600000,"start_timestamp":7200000,"data_stream":{"type":"metrics","dataset":"generic.otel","namespace":"default"},"resource":{},"scope":{},"metrics":{"metric.sum.monotonic.cumulative":1.5,"metric.sum.monotonic.delta":2.5,"metric.sum.nonmonotonic.cumulative":3.5,"metric.sum.nonmonotonic.delta":4.5},"_metric_names_hash":"4c23ec9ba381ab20"}`),
 			},
 			{
 				Action:   []byte(`{"create":{"_index":"metrics-generic.otel-default","dynamic_templates":{"metrics.metric.summary":"summary"}}}`),
-				Document: []byte(`{"@timestamp":"10800000.0","data_stream":{"dataset":"generic.otel","namespace":"default","type":"metrics"},"metrics":{"metric.summary":{"sum":1.5,"value_count":1}},"resource":{},"scope":{},"start_timestamp":"10800000.0","_metric_names_hash":"45a9e3cb"}`),
+				Document: []byte(`{"@timestamp":10800000,"data_stream":{"dataset":"generic.otel","namespace":"default","type":"metrics"},"metrics":{"metric.summary":{"sum":1.5,"value_count":1}},"resource":{},"scope":{},"start_timestamp":10800000,"_metric_names_hash":"2f30c89222c9d308"}`),
 			},
 		}
 
 		assertRecordedItems(t, expected, rec, false)
 	})
 
-	t.Run("otel mode attribute array value", func(t *testing.T) {
-		rec := newBulkRecorder()
-		server := newESTestServer(t, func(docs []itemRequest) ([]itemResponse, error) {
-			rec.Record(docs)
-			return itemsAllOK(docs)
-		})
+	t.Run("otel mode attribute", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
 
-		exporter := newTestMetricsExporter(t, server.URL, func(cfg *Config) {
-			cfg.Mapping.Mode = "otel"
-		})
+			recordAttrs   map[string]any
+			scopeAttrs    map[string]any
+			resourceAttrs map[string]any
 
-		mustSendMetrics(t, exporter, newMetricsWithAttributes(map[string]any{
-			"some.record.attribute": []string{"foo", "bar"},
-		}, map[string]any{
-			"some.scope.attribute": []string{"foo", "bar"},
-		}, map[string]any{
-			"some.resource.attribute": []string{"foo", "bar"},
-		}))
+			wantRecordAttrs   string
+			wantScopeAttrs    string
+			wantResourceAttrs string
+		}{
+			{
+				name: "slice value",
+				recordAttrs: map[string]any{
+					"some.record.attribute": []string{"foo", "bar"},
+				},
+				scopeAttrs: map[string]any{
+					"some.scope.attribute": []string{"foo", "bar"},
+				},
+				resourceAttrs: map[string]any{
+					"some.resource.attribute": []string{"foo", "bar"},
+				},
+				wantRecordAttrs:   `{"some.record.attribute":["foo","bar"]}`,
+				wantScopeAttrs:    `{"some.scope.attribute":["foo","bar"]}`,
+				wantResourceAttrs: `{"some.resource.attribute":["foo","bar"]}`,
+			},
+			{
+				name: "key prefix conflict",
+				recordAttrs: map[string]any{
+					"a":   "a",
+					"a.b": "a.b",
+				},
+				scopeAttrs: map[string]any{
+					"a":   "a",
+					"a.b": "a.b",
+				},
+				resourceAttrs: map[string]any{
+					"a":   "a",
+					"a.b": "a.b",
+				},
+				wantRecordAttrs:   `{"a":"a","a.b":"a.b"}`,
+				wantScopeAttrs:    `{"a":"a","a.b":"a.b"}`,
+				wantResourceAttrs: `{"a":"a","a.b":"a.b"}`,
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				rec := newBulkRecorder()
+				server := newESTestServer(t, func(docs []itemRequest) ([]itemResponse, error) {
+					rec.Record(docs)
+					return itemsAllOK(docs)
+				})
 
-		rec.WaitItems(1)
+				exporter := newTestMetricsExporter(t, server.URL, func(cfg *Config) {
+					cfg.Mapping.Mode = "otel"
+				})
 
-		assert.Len(t, rec.Items(), 1)
-		doc := rec.Items()[0].Document
-		assert.JSONEq(t, `{"some.record.attribute":["foo","bar"]}`, gjson.GetBytes(doc, `attributes`).Raw)
-		assert.JSONEq(t, `{"some.scope.attribute":["foo","bar"]}`, gjson.GetBytes(doc, `scope.attributes`).Raw)
-		assert.JSONEq(t, `{"some.resource.attribute":["foo","bar"]}`, gjson.GetBytes(doc, `resource.attributes`).Raw)
+				mustSendMetrics(t, exporter, newMetricsWithAttributes(tc.recordAttrs, tc.scopeAttrs, tc.resourceAttrs))
+				rec.WaitItems(1)
+
+				assert.Len(t, rec.Items(), 1)
+				doc := rec.Items()[0].Document
+				assert.JSONEq(t, tc.wantRecordAttrs, gjson.GetBytes(doc, `attributes`).Raw)
+				assert.JSONEq(t, tc.wantScopeAttrs, gjson.GetBytes(doc, `scope.attributes`).Raw)
+				assert.JSONEq(t, tc.wantResourceAttrs, gjson.GetBytes(doc, `resource.attributes`).Raw)
+			})
+		}
 	})
 
 	t.Run("otel mode _doc_count hint", func(t *testing.T) {
@@ -1302,7 +1476,7 @@ func TestExporterMetrics(t *testing.T) {
 		expected := []itemRequest{
 			{
 				Action:   []byte(`{"create":{"_index":"metrics-generic.otel-default","dynamic_templates":{"metrics.sum":"gauge_long","metrics.summary":"summary"}}}`),
-				Document: []byte(`{"@timestamp":"0.0","_doc_count":10,"data_stream":{"dataset":"generic.otel","namespace":"default","type":"metrics"},"metrics":{"sum":0,"summary":{"sum":1.0,"value_count":10}},"resource":{},"scope":{},"_metric_names_hash":"7dc58200"}`),
+				Document: []byte(`{"@timestamp":0,"_doc_count":10,"data_stream":{"dataset":"generic.otel","namespace":"default","type":"metrics"},"metrics":{"sum":0,"summary":{"sum":1.0,"value_count":10}},"resource":{},"scope":{},"_metric_names_hash":"e446964dc8337bbb"}`),
 			},
 		}
 
@@ -1352,11 +1526,11 @@ func TestExporterMetrics(t *testing.T) {
 		expected := []itemRequest{
 			{
 				Action:   []byte(`{"create":{"_index":"metrics-generic.otel-default","dynamic_templates":{"metrics.histogram.summary":"summary"}}}`),
-				Document: []byte(`{"@timestamp":"0.0","_doc_count":10,"data_stream":{"dataset":"generic.otel","namespace":"default","type":"metrics"},"attributes":{},"metrics":{"histogram.summary":{"sum":1.0,"value_count":10}},"resource":{},"scope":{},"_metric_names_hash":"acbaed6b"}`),
+				Document: []byte(`{"@timestamp":0,"_doc_count":10,"data_stream":{"dataset":"generic.otel","namespace":"default","type":"metrics"},"attributes":{},"metrics":{"histogram.summary":{"sum":1.0,"value_count":10}},"resource":{},"scope":{},"_metric_names_hash":"fcd1d6737d725996"}`),
 			},
 			{
 				Action:   []byte(`{"create":{"_index":"metrics-generic.otel-default","dynamic_templates":{"metrics.exphistogram.summary":"summary"}}}`),
-				Document: []byte(`{"@timestamp":"3600000.0","_doc_count":10,"data_stream":{"dataset":"generic.otel","namespace":"default","type":"metrics"},"attributes":{},"metrics":{"exphistogram.summary":{"sum":1.0,"value_count":10}},"resource":{},"scope":{},"_metric_names_hash":"29641c64"}`),
+				Document: []byte(`{"@timestamp":3600000,"_doc_count":10,"data_stream":{"dataset":"generic.otel","namespace":"default","type":"metrics"},"attributes":{},"metrics":{"exphistogram.summary":{"sum":1.0,"value_count":10}},"resource":{},"scope":{},"_metric_names_hash":"6a10ca190ae63c5"}`),
 			},
 		}
 
@@ -1395,40 +1569,11 @@ func TestExporterMetrics(t *testing.T) {
 		expected := []itemRequest{
 			{
 				Action:   []byte(`{"create":{"_index":"metrics-generic.otel-default","dynamic_templates":{"metrics.foo.bar":"gauge_long","metrics.foo":"gauge_long","metrics.foo.bar.baz":"gauge_long"}}}`),
-				Document: []byte(`{"@timestamp":"0.0","data_stream":{"dataset":"generic.otel","namespace":"default","type":"metrics"},"metrics":{"foo":0,"foo.bar":0,"foo.bar.baz":0},"resource":{},"scope":{},"_metric_names_hash":"204c382a"}`),
+				Document: []byte(`{"@timestamp":0,"data_stream":{"dataset":"generic.otel","namespace":"default","type":"metrics"},"metrics":{"foo":0,"foo.bar":0,"foo.bar.baz":0},"resource":{},"scope":{},"_metric_names_hash":"9c732a69b35274fe"}`),
 			},
 		}
 
 		assertRecordedItems(t, expected, rec, false)
-	})
-
-	t.Run("otel mode attribute key prefix conflict", func(t *testing.T) {
-		rec := newBulkRecorder()
-		server := newESTestServer(t, func(docs []itemRequest) ([]itemResponse, error) {
-			rec.Record(docs)
-			return itemsAllOK(docs)
-		})
-
-		exporter := newTestMetricsExporter(t, server.URL, func(cfg *Config) {
-			cfg.Mapping.Mode = "otel"
-		})
-
-		mustSendMetrics(t, exporter, newMetricsWithAttributes(map[string]any{
-			"a":   "a",
-			"a.b": "a.b",
-		}, map[string]any{
-			"a":   "a",
-			"a.b": "a.b",
-		}, map[string]any{
-			"a":   "a",
-			"a.b": "a.b",
-		}))
-
-		rec.WaitItems(1)
-		doc := rec.Items()[0].Document
-		assert.JSONEq(t, `{"a":"a","a.b":"a.b"}`, gjson.GetBytes(doc, `attributes`).Raw)
-		assert.JSONEq(t, `{"a":"a","a.b":"a.b"}`, gjson.GetBytes(doc, `scope.attributes`).Raw)
-		assert.JSONEq(t, `{"a":"a","a.b":"a.b"}`, gjson.GetBytes(doc, `resource.attributes`).Raw)
 	})
 
 	t.Run("publish summary", func(t *testing.T) {
@@ -1475,101 +1620,224 @@ func TestExporterMetrics(t *testing.T) {
 }
 
 func TestExporterMetrics_Grouping(t *testing.T) {
-	addToMetricSlice := func(metricSlice pmetric.MetricSlice) {
-		fooMetric := metricSlice.AppendEmpty()
-		fooMetric.SetName("metric.foo")
-		fooDps := fooMetric.SetEmptyGauge().DataPoints()
-		fooDp := fooDps.AppendEmpty()
-		fooDp.SetIntValue(1)
-		fooOtherDp := fooDps.AppendEmpty()
-		fillAttributeMap(fooOtherDp.Attributes(), map[string]any{
-			"dp.attribute": "dp.attribute.value",
-		})
-		fooOtherDp.SetDoubleValue(1.0)
+	{
+		addToMetricSlice := func(metricSlice pmetric.MetricSlice) {
+			fooMetric := metricSlice.AppendEmpty()
+			fooMetric.SetName("metric.foo")
+			fooDps := fooMetric.SetEmptyGauge().DataPoints()
+			fooDp := fooDps.AppendEmpty()
+			fooDp.SetIntValue(1)
+			fooOtherDp := fooDps.AppendEmpty()
+			fillAttributeMap(fooOtherDp.Attributes(), map[string]any{
+				"dp.attribute": "dp.attribute.value",
+			})
+			fooOtherDp.SetDoubleValue(1.0)
 
-		barMetric := metricSlice.AppendEmpty()
-		barMetric.SetName("metric.bar")
-		barDps := barMetric.SetEmptyGauge().DataPoints()
-		barDp := barDps.AppendEmpty() // dp without attribute
-		barDp.SetDoubleValue(1.0)
-		barOtherDp := barDps.AppendEmpty()
-		fillAttributeMap(barOtherDp.Attributes(), map[string]any{
-			"dp.attribute": "dp.attribute.value",
-		})
-		barOtherDp.SetDoubleValue(1.0)
-		barOtherIndexDp := barDps.AppendEmpty()
-		fillAttributeMap(barOtherIndexDp.Attributes(), map[string]any{
-			"dp.attribute":                    "dp.attribute.value",
-			elasticsearch.DataStreamNamespace: "bar",
-		})
-		barOtherIndexDp.SetDoubleValue(1.0)
+			barMetric := metricSlice.AppendEmpty()
+			barMetric.SetName("metric.bar")
+			barDps := barMetric.SetEmptyGauge().DataPoints()
+			barDp := barDps.AppendEmpty() // dp without attribute
+			barDp.SetDoubleValue(1.0)
+			barOtherDp := barDps.AppendEmpty()
+			fillAttributeMap(barOtherDp.Attributes(), map[string]any{
+				"dp.attribute": "dp.attribute.value",
+			})
+			barOtherDp.SetDoubleValue(1.0)
+			barOtherIndexDp := barDps.AppendEmpty()
+			fillAttributeMap(barOtherIndexDp.Attributes(), map[string]any{
+				"dp.attribute":                    "dp.attribute.value",
+				elasticsearch.DataStreamNamespace: "bar",
+			})
+			barOtherIndexDp.SetDoubleValue(1.0)
 
-		bazMetric := metricSlice.AppendEmpty()
-		bazMetric.SetName("metric.baz")
-		bazDps := bazMetric.SetEmptyGauge().DataPoints()
-		bazDp := bazDps.AppendEmpty()
-		bazDp.SetTimestamp(pcommon.NewTimestampFromTime(time.Unix(3600, 0))) // dp with different timestamp
-		bazDp.SetDoubleValue(1.0)
+			bazMetric := metricSlice.AppendEmpty()
+			bazMetric.SetName("metric.baz")
+			bazDps := bazMetric.SetEmptyGauge().DataPoints()
+			bazDp := bazDps.AppendEmpty()
+			bazDp.SetTimestamp(pcommon.NewTimestampFromTime(time.Unix(3600, 0))) // dp with different timestamp
+			bazDp.SetDoubleValue(1.0)
+		}
+
+		metrics := pmetric.NewMetrics()
+		resourceA := metrics.ResourceMetrics().AppendEmpty()
+		resourceA.SetSchemaUrl("http://example.com/resource_schema")
+		fillAttributeMap(resourceA.Resource().Attributes(), map[string]any{
+			elasticsearch.DataStreamNamespace: "resource.namespace",
+		})
+		scopeAA := resourceA.ScopeMetrics().AppendEmpty()
+		addToMetricSlice(scopeAA.Metrics())
+
+		scopeAB := resourceA.ScopeMetrics().AppendEmpty()
+		fillAttributeMap(scopeAB.Scope().Attributes(), map[string]any{
+			elasticsearch.DataStreamDataset: "scope.ab", // routes to a different index and should not be grouped together
+		})
+		scopeAB.SetSchemaUrl("http://example.com/scope_schema")
+		addToMetricSlice(scopeAB.Metrics())
+
+		scopeAC := resourceA.ScopeMetrics().AppendEmpty()
+		fillAttributeMap(scopeAC.Scope().Attributes(), map[string]any{
+			// ecs: scope attributes are ignored, and duplicates are dropped silently.
+			// otel: scope attributes are dimensions and should result in a separate group.
+			"some.scope.attribute": "scope.ac",
+		})
+		addToMetricSlice(scopeAC.Metrics())
+
+		resourceB := metrics.ResourceMetrics().AppendEmpty()
+		fillAttributeMap(resourceB.Resource().Attributes(), map[string]any{
+			"my.resource": "resource.b",
+		})
+		scopeBA := resourceB.ScopeMetrics().AppendEmpty()
+		addToMetricSlice(scopeBA.Metrics())
+
+		scopeBB := resourceB.ScopeMetrics().AppendEmpty()
+		scopeBB.Scope().SetName("scope.bb")
+		addToMetricSlice(scopeBB.Metrics())
+
+		// identical resource
+		resourceAnotherB := metrics.ResourceMetrics().AppendEmpty()
+		fillAttributeMap(resourceAnotherB.Resource().Attributes(), map[string]any{
+			"my.resource": "resource.b",
+		})
+		addToMetricSlice(resourceAnotherB.ScopeMetrics().AppendEmpty().Metrics())
+
+		assertDocsInIndices := func(t *testing.T, wantDocsPerIndex map[string]int, rec *bulkRecorder) {
+			var sum int
+			for _, v := range wantDocsPerIndex {
+				sum += v
+			}
+			rec.WaitItems(sum)
+
+			actualDocsPerIndex := make(map[string]int)
+			for _, item := range rec.Items() {
+				idx := gjson.GetBytes(item.Action, "create._index")
+				actualDocsPerIndex[idx.String()]++
+			}
+			assert.Equal(t, wantDocsPerIndex, actualDocsPerIndex)
+		}
+
+		t.Run("ecs", func(t *testing.T) {
+			rec := newBulkRecorder()
+			server := newESTestServer(t, func(docs []itemRequest) ([]itemResponse, error) {
+				rec.Record(docs)
+				return itemsAllOK(docs)
+			})
+
+			exporter := newTestMetricsExporter(t, server.URL, func(cfg *Config) {
+				cfg.Mapping.Mode = "ecs"
+			})
+
+			mustSendMetrics(t, exporter, metrics)
+
+			assertDocsInIndices(t, map[string]int{
+				"metrics-generic-bar":                 2, // AA, BA
+				"metrics-generic-resource.namespace":  3,
+				"metrics-scope.ab-bar":                1,
+				"metrics-scope.ab-resource.namespace": 3,
+				"metrics-generic-default":             3,
+			}, rec)
+		})
+
+		t.Run("otel", func(t *testing.T) {
+			rec := newBulkRecorder()
+			server := newESTestServer(t, func(docs []itemRequest) ([]itemResponse, error) {
+				rec.Record(docs)
+				return itemsAllOK(docs)
+			})
+
+			exporter := newTestMetricsExporter(t, server.URL, func(cfg *Config) {
+				cfg.Mapping.Mode = "otel"
+			})
+
+			mustSendMetrics(t, exporter, metrics)
+
+			assertDocsInIndices(t, map[string]int{
+				"metrics-generic.otel-bar":                 4, // AA->bar, AC->bar, BA->bar, BB->bar
+				"metrics-generic.otel-resource.namespace":  6, // AA, AC
+				"metrics-scope.ab.otel-bar":                1, // AB->bar
+				"metrics-scope.ab.otel-resource.namespace": 3, // AB
+				"metrics-generic.otel-default":             6, // BA, BB
+			}, rec)
+
+			type resourceScope struct {
+				resource attribute.Distinct
+				scope    attribute.Distinct
+			}
+
+			resourceScopeGroupings := make(map[resourceScope]int)
+			for _, item := range rec.Items() {
+				resource := gjson.GetBytes(item.Document, "resource")
+				require.True(t, resource.Exists())
+				scope := gjson.GetBytes(item.Document, "scope")
+				require.True(t, scope.Exists())
+				rs := resourceScope{
+					resource: mapToDistinct(resource.Value().(map[string]any)),
+					scope:    mapToDistinct(scope.Value().(map[string]any)),
+				}
+				resourceScopeGroupings[rs]++
+			}
+
+			assert.Equal(t, map[resourceScope]int{
+				{
+					// AA
+					resource: mapToDistinct(map[string]any{
+						"schema_url": "http://example.com/resource_schema",
+					}),
+					scope: mapToDistinct(nil),
+				}: 4,
+				{
+					// AB
+					resource: mapToDistinct(map[string]any{
+						"schema_url": "http://example.com/resource_schema",
+					}),
+					scope: mapToDistinct(map[string]any{
+						"schema_url": "http://example.com/scope_schema",
+					}),
+				}: 4,
+				{
+					// AC
+					resource: mapToDistinct(map[string]any{
+						"schema_url": "http://example.com/resource_schema",
+					}),
+					scope: mapToDistinct(map[string]any{
+						"attributes": map[string]any{"some.scope.attribute": "scope.ac"},
+					}),
+				}: 4,
+				{
+					// BA
+					resource: mapToDistinct(map[string]any{
+						"attributes": map[string]any{"my.resource": "resource.b"},
+					}),
+					scope: mapToDistinct(nil),
+				}: 4,
+				{
+					// BB
+					resource: mapToDistinct(map[string]any{
+						"attributes": map[string]any{"my.resource": "resource.b"},
+					}),
+					scope: mapToDistinct(map[string]any{
+						"name": "scope.bb",
+					}),
+				}: 4,
+			}, resourceScopeGroupings)
+		})
 	}
 
-	metrics := pmetric.NewMetrics()
-	resourceA := metrics.ResourceMetrics().AppendEmpty()
-	resourceA.SetSchemaUrl("http://example.com/resource_schema")
-	fillAttributeMap(resourceA.Resource().Attributes(), map[string]any{
-		elasticsearch.DataStreamNamespace: "resource.namespace",
-	})
-	scopeAA := resourceA.ScopeMetrics().AppendEmpty()
-	addToMetricSlice(scopeAA.Metrics())
-
-	scopeAB := resourceA.ScopeMetrics().AppendEmpty()
-	fillAttributeMap(scopeAB.Scope().Attributes(), map[string]any{
-		elasticsearch.DataStreamDataset: "scope.ab", // routes to a different index and should not be grouped together
-	})
-	scopeAB.SetSchemaUrl("http://example.com/scope_schema")
-	addToMetricSlice(scopeAB.Metrics())
-
-	scopeAC := resourceA.ScopeMetrics().AppendEmpty()
-	fillAttributeMap(scopeAC.Scope().Attributes(), map[string]any{
-		// ecs: scope attributes are ignored, and duplicates are dropped silently.
-		// otel: scope attributes are dimensions and should result in a separate group.
-		"some.scope.attribute": "scope.ac",
-	})
-	addToMetricSlice(scopeAC.Metrics())
-
-	resourceB := metrics.ResourceMetrics().AppendEmpty()
-	fillAttributeMap(resourceB.Resource().Attributes(), map[string]any{
-		"my.resource": "resource.b",
-	})
-	scopeBA := resourceB.ScopeMetrics().AppendEmpty()
-	addToMetricSlice(scopeBA.Metrics())
-
-	scopeBB := resourceB.ScopeMetrics().AppendEmpty()
-	scopeBB.Scope().SetName("scope.bb")
-	addToMetricSlice(scopeBB.Metrics())
-
-	// identical resource
-	resourceAnotherB := metrics.ResourceMetrics().AppendEmpty()
-	fillAttributeMap(resourceAnotherB.Resource().Attributes(), map[string]any{
-		"my.resource": "resource.b",
-	})
-	addToMetricSlice(resourceAnotherB.ScopeMetrics().AppendEmpty().Metrics())
-
-	assertDocsInIndices := func(t *testing.T, wantDocsPerIndex map[string]int, rec *bulkRecorder) {
-		var sum int
-		for _, v := range wantDocsPerIndex {
-			sum += v
-		}
-		rec.WaitItems(sum)
-
-		actualDocsPerIndex := make(map[string]int)
-		for _, item := range rec.Items() {
-			idx := gjson.GetBytes(item.Action, "create._index")
-			actualDocsPerIndex[idx.String()]++
-		}
-		assert.Equal(t, wantDocsPerIndex, actualDocsPerIndex)
+	type kv struct {
+		k, v string
 	}
 
-	t.Run("ecs", func(t *testing.T) {
+	// addMetric adds a new metric with name `name` and data point attributes `dpAttrs` to MetricSlice `slice`.
+	addMetric := func(slice pmetric.MetricSlice, name string, dpAttrs []kv) {
+		metric := slice.AppendEmpty()
+		metric.SetName(name)
+		dp := metric.SetEmptySum().DataPoints().AppendEmpty()
+		dp.SetDoubleValue(1)
+		for _, kv := range dpAttrs {
+			dp.Attributes().PutStr(kv.k, kv.v)
+		}
+	}
+
+	t.Run("ecs dp attribute overwrites resource attribute", func(t *testing.T) {
 		rec := newBulkRecorder()
 		server := newESTestServer(t, func(docs []itemRequest) ([]itemResponse, error) {
 			rec.Record(docs)
@@ -1580,99 +1848,95 @@ func TestExporterMetrics_Grouping(t *testing.T) {
 			cfg.Mapping.Mode = "ecs"
 		})
 
-		mustSendMetrics(t, exporter, metrics)
+		metrics := pmetric.NewMetrics()
+		resource := metrics.ResourceMetrics().AppendEmpty()
+		resource.Resource().Attributes().PutStr("a", "b")
+		scope := resource.ScopeMetrics().AppendEmpty()
 
-		assertDocsInIndices(t, map[string]int{
-			"metrics-generic-bar":                 2, // AA, BA
-			"metrics-generic-resource.namespace":  3,
-			"metrics-scope.ab-bar":                1,
-			"metrics-scope.ab-resource.namespace": 3,
-			"metrics-generic-default":             3,
-		}, rec)
+		// a=c overwrites a=b in resource attribute
+		addMetric(scope.Metrics(), "foo", []kv{{k: "a", v: "c"}})
+
+		// no attribute, should still serialize as a=b
+		addMetric(scope.Metrics(), "bar", nil)
+
+		// a=b overwrites a=b in resource attribute
+		addMetric(scope.Metrics(), "baz", []kv{{k: "a", v: "b"}})
+
+		mustSendMetrics(t, exporter, metrics)
+		expected := []itemRequest{
+			{
+				Action:   []byte(`{"create":{"_index":"metrics-generic-default"}}`),
+				Document: []byte(`{"@timestamp":"1970-01-01T00:00:00.000000000Z","data_stream":{"dataset":"generic","namespace":"default","type":"metrics"},"foo":1.0,"a":"c"}`),
+			},
+			{
+				Action:   []byte(`{"create":{"_index":"metrics-generic-default"}}`),
+				Document: []byte(`{"@timestamp":"1970-01-01T00:00:00.000000000Z","data_stream":{"dataset":"generic","namespace":"default","type":"metrics"},"bar":1.0,"baz":1.0,"a":"b"}`),
+			},
+		}
+
+		assertRecordedItems(t, expected, rec, false)
 	})
 
-	t.Run("otel", func(t *testing.T) {
-		rec := newBulkRecorder()
-		server := newESTestServer(t, func(docs []itemRequest) ([]itemResponse, error) {
-			rec.Record(docs)
-			return itemsAllOK(docs)
-		})
+	t.Run("unordered attributes", func(t *testing.T) {
+		// Test equal attributes but in a different order. Metrics should be grouped together.
+		for _, mode := range []string{"ecs", "otel"} {
+			t.Run(mode, func(t *testing.T) {
+				rec := newBulkRecorder()
+				server := newESTestServer(t, func(docs []itemRequest) ([]itemResponse, error) {
+					rec.Record(docs)
+					return itemsAllOK(docs)
+				})
 
-		exporter := newTestMetricsExporter(t, server.URL, func(cfg *Config) {
-			cfg.Mapping.Mode = "otel"
-		})
+				exporter := newTestMetricsExporter(t, server.URL, func(cfg *Config) {
+					cfg.Mapping.Mode = mode
+				})
 
-		mustSendMetrics(t, exporter, metrics)
+				metrics := pmetric.NewMetrics()
+				resourceA := metrics.ResourceMetrics().AppendEmpty()
+				resourceA.Resource().Attributes().PutStr("a", "a")
+				resourceA.Resource().Attributes().PutStr("b", "b")
+				scopeA := resourceA.ScopeMetrics().AppendEmpty()
+				scopeA.Scope().Attributes().PutStr("c", "c")
+				scopeA.Scope().Attributes().PutStr("d", "d")
 
-		assertDocsInIndices(t, map[string]int{
-			"metrics-generic.otel-bar":                 4, // AA->bar, AC->bar, BA->bar, BB->bar
-			"metrics-generic.otel-resource.namespace":  6, // AA, AC
-			"metrics-scope.ab.otel-bar":                1, // AB->bar
-			"metrics-scope.ab.otel-resource.namespace": 3, // AB
-			"metrics-generic.otel-default":             6, // BA, BB
-		}, rec)
+				addMetric(scopeA.Metrics(), "a_foo", []kv{
+					{"e", "e"},
+					{"f", "f"},
+				})
 
-		type resourceScope struct {
-			resource attribute.Distinct
-			scope    attribute.Distinct
+				addMetric(scopeA.Metrics(), "a_bar", []kv{
+					{"f", "f"},
+					{"e", "e"},
+				})
+
+				resourceB := metrics.ResourceMetrics().AppendEmpty()
+				resourceB.Resource().Attributes().PutStr("b", "b")
+				resourceB.Resource().Attributes().PutStr("a", "a")
+				scopeB := resourceB.ScopeMetrics().AppendEmpty()
+				scopeB.Scope().Attributes().PutStr("d", "d")
+				scopeB.Scope().Attributes().PutStr("c", "c")
+
+				addMetric(scopeB.Metrics(), "b_foo", []kv{
+					{"e", "e"},
+					{"f", "f"},
+				})
+
+				addMetric(scopeB.Metrics(), "b_bar", []kv{
+					{"f", "f"},
+					{"e", "e"},
+				})
+
+				mustSendMetrics(t, exporter, metrics)
+
+				rec.WaitItems(1)
+				assert.Len(t, rec.Items(), 1)
+				// Sanity check that all metrics are included
+				assert.Contains(t, string(rec.Items()[0].Document), "a_foo")
+				assert.Contains(t, string(rec.Items()[0].Document), "a_bar")
+				assert.Contains(t, string(rec.Items()[0].Document), "b_foo")
+				assert.Contains(t, string(rec.Items()[0].Document), "b_bar")
+			})
 		}
-
-		resourceScopeGroupings := make(map[resourceScope]int)
-		for _, item := range rec.Items() {
-			resource := gjson.GetBytes(item.Document, "resource")
-			require.True(t, resource.Exists())
-			scope := gjson.GetBytes(item.Document, "scope")
-			require.True(t, scope.Exists())
-			rs := resourceScope{
-				resource: mapToDistinct(resource.Value().(map[string]any)),
-				scope:    mapToDistinct(scope.Value().(map[string]any)),
-			}
-			resourceScopeGroupings[rs]++
-		}
-
-		assert.Equal(t, map[resourceScope]int{
-			{
-				// AA
-				resource: mapToDistinct(map[string]any{
-					"schema_url": "http://example.com/resource_schema",
-				}),
-				scope: mapToDistinct(nil),
-			}: 4,
-			{
-				// AB
-				resource: mapToDistinct(map[string]any{
-					"schema_url": "http://example.com/resource_schema",
-				}),
-				scope: mapToDistinct(map[string]any{
-					"schema_url": "http://example.com/scope_schema",
-				}),
-			}: 4,
-			{
-				// AC
-				resource: mapToDistinct(map[string]any{
-					"schema_url": "http://example.com/resource_schema",
-				}),
-				scope: mapToDistinct(map[string]any{
-					"attributes": map[string]any{"some.scope.attribute": "scope.ac"},
-				}),
-			}: 4,
-			{
-				// BA
-				resource: mapToDistinct(map[string]any{
-					"attributes": map[string]any{"my.resource": "resource.b"},
-				}),
-				scope: mapToDistinct(nil),
-			}: 4,
-			{
-				// BB
-				resource: mapToDistinct(map[string]any{
-					"attributes": map[string]any{"my.resource": "resource.b"},
-				}),
-				scope: mapToDistinct(map[string]any{
-					"name": "scope.bb",
-				}),
-			}: 4,
-		}, resourceScopeGroupings)
 	})
 }
 
@@ -1881,7 +2145,7 @@ func TestExporterTraces(t *testing.T) {
 		expected := []itemRequest{
 			{
 				Action:   []byte(`{"create":{"_index":"traces-generic.otel-default"}}`),
-				Document: []byte(`{"@timestamp":"3600000.0","attributes":{"attr.foo":"attr.bar"},"data_stream":{"dataset":"generic.otel","namespace":"default","type":"traces"},"dropped_attributes_count":2,"dropped_events_count":3,"dropped_links_count":4,"duration":3600000000000,"kind":"Unspecified","links":[{"attributes":{"link.attr.foo":"link.attr.bar"},"dropped_attributes_count":11,"span_id":"0100000000000000","trace_id":"01000000000000000000000000000000","trace_state":"bar"}],"name":"name","resource":{"attributes":{"resource.foo":"resource.bar"}},"scope":{},"status":{"code":"Unset"},"trace_state":"foo"}`),
+				Document: []byte(`{"@timestamp":"3600000.0","attributes":{"attr.foo":"attr.bar"},"data_stream":{"dataset":"generic.otel","namespace":"default","type":"traces"},"dropped_attributes_count":2,"dropped_events_count":3,"dropped_links_count":4,"duration":3600000000000,"kind":"Unspecified","links":[{"attributes":{"link.attr.foo":"link.attr.bar"},"dropped_attributes_count":11,"span_id":"0100000000000000","trace_id":"01000000000000000000000000000000","trace_state":"bar"}],"name":"name","resource":{"attributes":{"resource.foo":"resource.bar"}},"scope":{},"status":{},"trace_state":"foo"}`),
 			},
 			{
 				Action:   []byte(`{"create":{"_index":"logs-generic.otel-default"}}`),
@@ -1965,140 +2229,209 @@ func TestExporterTraces(t *testing.T) {
 		}
 	})
 
-	t.Run("otel mode attribute array value", func(t *testing.T) {
-		rec := newBulkRecorder()
-		server := newESTestServer(t, func(docs []itemRequest) ([]itemResponse, error) {
-			rec.Record(docs)
-			return itemsAllOK(docs)
-		})
+	t.Run("otel mode attribute", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
 
-		exporter := newTestTracesExporter(t, server.URL, func(cfg *Config) {
-			cfg.Mapping.Mode = "otel"
-		})
+			recordAttrs   map[string]any
+			scopeAttrs    map[string]any
+			resourceAttrs map[string]any
 
-		traces := newTracesWithAttributes(map[string]any{
-			"some.record.attribute": []string{"foo", "bar"},
-		}, map[string]any{
-			"some.scope.attribute": []string{"foo", "bar"},
-		}, map[string]any{
-			"some.resource.attribute": []string{"foo", "bar"},
-		})
-		spanEventAttrs := traces.ResourceSpans().At(0).ScopeSpans().At(0).Spans().At(0).Events().AppendEmpty().Attributes()
-		fillAttributeMap(spanEventAttrs, map[string]any{
-			"some.record.attribute": []string{"foo", "bar"},
-		})
-		mustSendTraces(t, exporter, traces)
+			wantRecordAttrs   string
+			wantScopeAttrs    string
+			wantResourceAttrs string
+		}{
+			{
+				name: "slice value",
+				recordAttrs: map[string]any{
+					"some.record.attribute": []string{"foo", "bar"},
+				},
+				scopeAttrs: map[string]any{
+					"some.scope.attribute": []string{"foo", "bar"},
+				},
+				resourceAttrs: map[string]any{
+					"some.resource.attribute": []string{"foo", "bar"},
+				},
+				wantRecordAttrs:   `{"some.record.attribute":["foo","bar"]}`,
+				wantScopeAttrs:    `{"some.scope.attribute":["foo","bar"]}`,
+				wantResourceAttrs: `{"some.resource.attribute":["foo","bar"]}`,
+			},
+			{
+				name: "key prefix conflict",
+				recordAttrs: map[string]any{
+					"a":   "a",
+					"a.b": "a.b",
+				},
+				scopeAttrs: map[string]any{
+					"a":   "a",
+					"a.b": "a.b",
+				},
+				resourceAttrs: map[string]any{
+					"a":   "a",
+					"a.b": "a.b",
+				},
+				wantRecordAttrs:   `{"a":"a","a.b":"a.b"}`,
+				wantScopeAttrs:    `{"a":"a","a.b":"a.b"}`,
+				wantResourceAttrs: `{"a":"a","a.b":"a.b"}`,
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				rec := newBulkRecorder()
+				server := newESTestServer(t, func(docs []itemRequest) ([]itemResponse, error) {
+					rec.Record(docs)
+					return itemsAllOK(docs)
+				})
 
-		rec.WaitItems(2)
+				exporter := newTestTracesExporter(t, server.URL, func(cfg *Config) {
+					cfg.Mapping.Mode = "otel"
+				})
 
-		assert.Len(t, rec.Items(), 2)
-		for _, item := range rec.Items() {
-			doc := item.Document
-			assert.JSONEq(t, `{"some.record.attribute":["foo","bar"]}`, gjson.GetBytes(doc, `attributes`).Raw)
-			assert.JSONEq(t, `{"some.scope.attribute":["foo","bar"]}`, gjson.GetBytes(doc, `scope.attributes`).Raw)
-			assert.JSONEq(t, `{"some.resource.attribute":["foo","bar"]}`, gjson.GetBytes(doc, `resource.attributes`).Raw)
+				traces := newTracesWithAttributes(tc.recordAttrs, tc.scopeAttrs, tc.resourceAttrs)
+				spanEventAttrs := traces.ResourceSpans().At(0).ScopeSpans().At(0).Spans().At(0).Events().AppendEmpty().Attributes()
+				fillAttributeMap(spanEventAttrs, tc.recordAttrs)
+				mustSendTraces(t, exporter, traces)
+
+				rec.WaitItems(2)
+
+				assert.Len(t, rec.Items(), 2)
+				for _, item := range rec.Items() {
+					doc := item.Document
+					assert.JSONEq(t, tc.wantRecordAttrs, gjson.GetBytes(doc, `attributes`).Raw)
+					assert.JSONEq(t, tc.wantScopeAttrs, gjson.GetBytes(doc, `scope.attributes`).Raw)
+					assert.JSONEq(t, tc.wantResourceAttrs, gjson.GetBytes(doc, `resource.attributes`).Raw)
+				}
+			})
 		}
-	})
-
-	t.Run("otel mode attribute key prefix conflict", func(t *testing.T) {
-		rec := newBulkRecorder()
-		server := newESTestServer(t, func(docs []itemRequest) ([]itemResponse, error) {
-			rec.Record(docs)
-			return itemsAllOK(docs)
-		})
-
-		exporter := newTestTracesExporter(t, server.URL, func(cfg *Config) {
-			cfg.Mapping.Mode = "otel"
-		})
-
-		mustSendTraces(t, exporter, newTracesWithAttributes(map[string]any{
-			"a":   "a",
-			"a.b": "a.b",
-		}, map[string]any{
-			"a":   "a",
-			"a.b": "a.b",
-		}, map[string]any{
-			"a":   "a",
-			"a.b": "a.b",
-		}))
-
-		rec.WaitItems(1)
-		doc := rec.Items()[0].Document
-		assert.JSONEq(t, `{"a":"a","a.b":"a.b"}`, gjson.GetBytes(doc, `attributes`).Raw)
-		assert.JSONEq(t, `{"a":"a","a.b":"a.b"}`, gjson.GetBytes(doc, `scope.attributes`).Raw)
-		assert.JSONEq(t, `{"a":"a","a.b":"a.b"}`, gjson.GetBytes(doc, `resource.attributes`).Raw)
 	})
 }
 
-func TestExporter_MappingModeMetadata(t *testing.T) {
-	otelContext := client.NewContext(context.Background(), client.Info{
+func TestExporter_DynamicMappingMode(t *testing.T) {
+	otelContext := client.NewContext(t.Context(), client.Info{
 		Metadata: client.NewMetadata(map[string][]string{"X-Elastic-Mapping-Mode": {"otel"}}),
 	})
-	ecsContext := client.NewContext(context.Background(), client.Info{
+	ecsContext := client.NewContext(t.Context(), client.Info{
 		Metadata: client.NewMetadata(map[string][]string{"X-Elastic-Mapping-Mode": {"ecs"}}),
 	})
-	noneContext := client.NewContext(context.Background(), client.Info{
+	noneContext := client.NewContext(t.Context(), client.Info{
 		Metadata: client.NewMetadata(map[string][]string{"X-Elastic-Mapping-Mode": {"none"}}),
 	})
+	multipleModesContext := client.NewContext(t.Context(), client.Info{
+		Metadata: client.NewMetadata(map[string][]string{"X-Elastic-Mapping-Mode": {"otel", "ecs"}}),
+	})
 
-	logs := plog.NewLogs()
-	resourceLog := logs.ResourceLogs().AppendEmpty()
-	resourceLog.Resource().Attributes().PutStr("k", "v")
-	scopeLog := resourceLog.ScopeLogs().AppendEmpty()
-	scopeLog.LogRecords().AppendEmpty()
-	logs.MarkReadOnly()
+	defaultScope := pcommon.NewInstrumentationScope()
+	ecsScope := pcommon.NewInstrumentationScope()
+	ecsScope.Attributes().PutStr("elastic.mapping.mode", "ecs")
+	bodymapScope := pcommon.NewInstrumentationScope()
+	bodymapScope.Attributes().PutStr("elastic.mapping.mode", "bodymap")
 
-	metrics := pmetric.NewMetrics()
-	resourceMetrics := metrics.ResourceMetrics().AppendEmpty()
-	resourceMetrics.Resource().Attributes().PutStr("k", "v")
-	metric := resourceMetrics.ScopeMetrics().AppendEmpty().Metrics().AppendEmpty()
-	metric.SetName("metric.foo")
-	metric.SetEmptySum().DataPoints().AppendEmpty().SetIntValue(123)
-	metrics.MarkReadOnly()
+	createLogs := func(scopes ...pcommon.InstrumentationScope) plog.Logs {
+		logs := plog.NewLogs()
+		resourceLog := logs.ResourceLogs().AppendEmpty()
+		resourceLog.Resource().Attributes().PutStr("k", "v")
+		for _, scope := range scopes {
+			scopeLog := resourceLog.ScopeLogs().AppendEmpty()
+			scope.CopyTo(scopeLog.Scope())
+			scopeLog.LogRecords().AppendEmpty()
+		}
+		logs.MarkReadOnly()
+		return logs
+	}
 
-	traces := ptrace.NewTraces()
-	resourceSpans := traces.ResourceSpans().AppendEmpty()
-	resourceSpans.Resource().Attributes().PutStr("k", "v")
-	resourceSpans.ScopeSpans().AppendEmpty().Spans().AppendEmpty()
-	traces.MarkReadOnly()
+	createMetrics := func(scopes ...pcommon.InstrumentationScope) pmetric.Metrics {
+		metrics := pmetric.NewMetrics()
+		resourceMetrics := metrics.ResourceMetrics().AppendEmpty()
+		resourceMetrics.Resource().Attributes().PutStr("k", "v")
+		for _, scope := range scopes {
+			scopeMetrics := resourceMetrics.ScopeMetrics().AppendEmpty()
+			scope.CopyTo(scopeMetrics.Scope())
+			metric := scopeMetrics.Metrics().AppendEmpty()
+			metric.SetName("metric.foo")
+			metric.SetEmptySum().DataPoints().AppendEmpty().SetIntValue(123)
+		}
+		metrics.MarkReadOnly()
+		return metrics
+	}
+
+	createTraces := func(scopes ...pcommon.InstrumentationScope) ptrace.Traces {
+		traces := ptrace.NewTraces()
+		resourceSpans := traces.ResourceSpans().AppendEmpty()
+		resourceSpans.Resource().Attributes().PutStr("k", "v")
+		for _, scope := range scopes {
+			scopeSpans := resourceSpans.ScopeSpans().AppendEmpty()
+			scope.CopyTo(scopeSpans.Scope())
+			scopeSpans.Spans().AppendEmpty()
+		}
+		traces.MarkReadOnly()
+		return traces
+	}
+
+	// sortItemRequests sorts by _index, so we get consistent ordering for
+	// the different scopes below. This is necessary since bulk requests
+	// are produced concurrently for each mapping mode.
+	sortItemRequests := func(items []itemRequest) {
+		sort.Slice(items, func(i, j int) bool {
+			return gjson.GetBytes(items[i].Action, "create._index").Str <
+				gjson.GetBytes(items[j].Action, "create._index").Str
+		})
+	}
 
 	setAllowedMappingModes := func(cfg *Config) {
 		cfg.Mapping.AllowedModes = []string{"ecs", "otel"}
 		cfg.Mapping.Mode = "otel"
 	}
 
+	type checkFunc func(_ *testing.T, doc []byte, signal string)
 	checkOTelResource := func(t *testing.T, doc []byte, _ string) {
 		t.Helper()
 		assert.JSONEq(t, `{"k":"v"}`, gjson.GetBytes(doc, `resource.attributes`).Raw)
 	}
-	checkECSResource := func(t *testing.T, doc []byte, signal string) {
+	checkECSResource := func(t *testing.T, doc []byte, _ string) {
 		t.Helper()
-		if signal == "traces" {
-			// ecs mode schema for spans is currently very different
-			// to logs and metrics
-			assert.Equal(t, "v", gjson.GetBytes(doc, "Resource.k").Str)
-		} else {
-			assert.Equal(t, "v", gjson.GetBytes(doc, "k").Str)
-		}
+		assert.Equal(t, "v", gjson.GetBytes(doc, "k").Str)
 	}
 
 	testcases := []struct {
 		name      string
 		ctx       context.Context
-		check     func(_ *testing.T, doc []byte, signal string)
+		scopes    []pcommon.InstrumentationScope
+		checks    []checkFunc
 		expectErr string
 	}{{
-		name:  "otel",
-		ctx:   otelContext,
-		check: checkOTelResource,
+		name:   "otel",
+		ctx:    otelContext,
+		scopes: []pcommon.InstrumentationScope{defaultScope},
+		checks: []checkFunc{checkOTelResource},
 	}, {
-		name:  "ecs",
-		ctx:   ecsContext,
-		check: checkECSResource,
+		name:   "ecs",
+		ctx:    ecsContext,
+		scopes: []pcommon.InstrumentationScope{defaultScope},
+		checks: []checkFunc{checkECSResource},
 	}, {
-		name:      "bodymap",
+		name:      "none",
 		ctx:       noneContext,
-		expectErr: `unsupported mapping mode "none", expected one of ["ecs" "otel"]`,
+		scopes:    []pcommon.InstrumentationScope{defaultScope},
+		expectErr: `Permanent error: invalid context mapping mode: unsupported mapping mode "none", expected one of ["ecs" "otel"]`,
+	}, {
+		name:      "multiple modes",
+		ctx:       multipleModesContext,
+		scopes:    []pcommon.InstrumentationScope{defaultScope},
+		expectErr: `Permanent error: expected one value for client metadata key "x-elastic-mapping-mode", got 2`,
+	}, {
+		name:   "ecs_scope",
+		ctx:    t.Context(),
+		scopes: []pcommon.InstrumentationScope{ecsScope},
+		checks: []checkFunc{checkECSResource},
+	}, {
+		name:   "mixed_scopes",
+		ctx:    t.Context(),
+		scopes: []pcommon.InstrumentationScope{ecsScope, defaultScope},
+		checks: []checkFunc{checkECSResource, checkOTelResource},
+	}, {
+		name:      "bodymap_scope",
+		ctx:       otelContext, // scope overrides context
+		scopes:    []pcommon.InstrumentationScope{bodymapScope},
+		expectErr: `Permanent error: invalid scope mapping mode: unsupported mapping mode "bodymap", expected one of ["ecs" "otel"]`,
 	}}
 
 	t.Run("logs", func(t *testing.T) {
@@ -2109,15 +2442,23 @@ func TestExporter_MappingModeMetadata(t *testing.T) {
 					rec.Record(docs)
 					return itemsAllOK(docs)
 				})
-				exporter := newTestLogsExporter(t, server.URL, setAllowedMappingModes)
+
+				logs := createLogs(tc.scopes...)
+				exporter := newTestLogsExporter(t, server.URL, setAllowedMappingModes, func(cfg *Config) {
+					// Set wait_for_result to be true so that errors are reported directly via Consume*
+					cfg.QueueBatchConfig.WaitForResult = true
+				})
 				err := exporter.ConsumeLogs(tc.ctx, logs)
 				if tc.expectErr != "" {
 					require.EqualError(t, err, tc.expectErr)
 					return
 				}
 				require.NoError(t, err)
-				items := rec.WaitItems(1)
-				tc.check(t, items[0].Document, "logs")
+				items := rec.WaitItems(len(tc.scopes))
+				sortItemRequests(items)
+				for i, item := range items {
+					tc.checks[i](t, item.Document, "logs")
+				}
 			})
 		}
 	})
@@ -2129,25 +2470,41 @@ func TestExporter_MappingModeMetadata(t *testing.T) {
 					rec.Record(docs)
 					return itemsAllOK(docs)
 				})
-				exporter := newTestMetricsExporter(t, server.URL, setAllowedMappingModes)
+
+				metrics := createMetrics(tc.scopes...)
+				exporter := newTestMetricsExporter(t, server.URL, setAllowedMappingModes, func(cfg *Config) {
+					// Set wait_for_result to be true so that errors are reported directly via Consume*
+					cfg.QueueBatchConfig.WaitForResult = true
+				})
 				err := exporter.ConsumeMetrics(tc.ctx, metrics)
 				if tc.expectErr != "" {
 					require.EqualError(t, err, tc.expectErr)
 					return
 				}
 				require.NoError(t, err)
-				items := rec.WaitItems(1)
-				tc.check(t, items[0].Document, "metrics")
+				items := rec.WaitItems(len(tc.scopes))
+				sortItemRequests(items)
+				for i, item := range items {
+					tc.checks[i](t, item.Document, "metrics")
+				}
 			})
 		}
 	})
 	t.Run("profiles", func(t *testing.T) {
 		// Profiles are only supported by otel mode, so just verify that
-		// the metadata is picked up and an invalid mode is rejected.
-		exporter := newTestProfilesExporter(t, "https://testing.invalid", setAllowedMappingModes)
+		// the metadata is picked up and invalid modes are rejected.
+		exporter := newTestProfilesExporter(t, "https://testing.invalid", setAllowedMappingModes, func(cfg *Config) {
+			// Set wait_for_result to be true so that errors are reported directly via Consume*
+			cfg.QueueBatchConfig.WaitForResult = true
+		})
 		err := exporter.ConsumeProfiles(noneContext, pprofile.NewProfiles())
 		assert.EqualError(t, err,
-			`unsupported mapping mode "none", expected one of ["ecs" "otel"]`,
+			`Permanent error: invalid context mapping mode: unsupported mapping mode "none", expected one of ["ecs" "otel"]`,
+		)
+
+		err = exporter.ConsumeProfiles(multipleModesContext, pprofile.NewProfiles())
+		assert.EqualError(t, err,
+			`Permanent error: expected one value for client metadata key "x-elastic-mapping-mode", got 2`,
 		)
 	})
 	t.Run("traces", func(t *testing.T) {
@@ -2158,15 +2515,23 @@ func TestExporter_MappingModeMetadata(t *testing.T) {
 					rec.Record(docs)
 					return itemsAllOK(docs)
 				})
-				exporter := newTestTracesExporter(t, server.URL, setAllowedMappingModes)
+
+				traces := createTraces(tc.scopes...)
+				exporter := newTestTracesExporter(t, server.URL, setAllowedMappingModes, func(cfg *Config) {
+					// Set wait_for_result to be true so that errors are reported directly via Consume*
+					cfg.QueueBatchConfig.WaitForResult = true
+				})
 				err := exporter.ConsumeTraces(tc.ctx, traces)
 				if tc.expectErr != "" {
 					require.EqualError(t, err, tc.expectErr)
 					return
 				}
 				require.NoError(t, err)
-				items := rec.WaitItems(1)
-				tc.check(t, items[0].Document, "traces")
+				items := rec.WaitItems(len(tc.scopes))
+				sortItemRequests(items)
+				for i, item := range items {
+					tc.checks[i](t, item.Document, "traces")
+				}
 			})
 		}
 	})
@@ -2178,9 +2543,9 @@ func TestExporterAuth(t *testing.T) {
 	done := make(chan struct{}, 1)
 	testauthID := component.NewID(component.MustNewType("authtest"))
 	exporter := newUnstartedTestLogsExporter(t, "http://testing.invalid", func(cfg *Config) {
-		cfg.Auth = &configauth.Authentication{AuthenticatorID: testauthID}
+		cfg.Auth = configoptional.Some(configauth.Config{AuthenticatorID: testauthID})
 	})
-	err := exporter.Start(context.Background(), &mockHost{
+	err := exporter.Start(t.Context(), &mockHost{
 		extensions: map[component.ID]component.Component{
 			testauthID: newMockAuthClient(func(*http.Request) (*http.Response, error) {
 				select {
@@ -2193,7 +2558,7 @@ func TestExporterAuth(t *testing.T) {
 	})
 	require.NoError(t, err)
 	defer func() {
-		require.NoError(t, exporter.Shutdown(context.Background()))
+		require.NoError(t, exporter.Shutdown(t.Context()))
 	}()
 
 	mustSendLogRecords(t, exporter, plog.NewLogRecord())
@@ -2204,17 +2569,18 @@ func TestExporterBatcher(t *testing.T) {
 	var requests []*http.Request
 	testauthID := component.NewID(component.MustNewType("authtest"))
 	exporter := newUnstartedTestLogsExporter(t, "http://testing.invalid", func(cfg *Config) {
-		batcherCfg := exporterhelper.NewDefaultBatcherConfig() //nolint:staticcheck
-		batcherCfg.Enabled = false
-		cfg.Batcher = BatcherConfig{
-			// sync bulk indexer is used without batching
-			BatcherConfig: batcherCfg,
-			enabledSet:    true,
-		}
-		cfg.Auth = &configauth.Authentication{AuthenticatorID: testauthID}
+		cfg.QueueBatchConfig.Enabled = true
+		cfg.QueueBatchConfig.WaitForResult = true
+		cfg.QueueBatchConfig.Batch = configoptional.Some(exporterhelper.BatchConfig{
+			FlushTimeout: 200 * time.Millisecond,
+			Sizer:        exporterhelper.RequestSizerTypeItems,
+			MinSize:      8192,
+			MaxSize:      10000,
+		})
+		cfg.Auth = configoptional.Some(configauth.Config{AuthenticatorID: testauthID})
 		cfg.Retry.Enabled = false
 	})
-	err := exporter.Start(context.Background(), &mockHost{
+	err := exporter.Start(t.Context(), &mockHost{
 		extensions: map[component.ID]component.Component{
 			testauthID: newMockAuthClient(func(req *http.Request) (*http.Response, error) {
 				requests = append(requests, req)
@@ -2224,7 +2590,7 @@ func TestExporterBatcher(t *testing.T) {
 	})
 	require.NoError(t, err)
 	defer func() {
-		require.NoError(t, exporter.Shutdown(context.Background()))
+		require.NoError(t, exporter.Shutdown(t.Context()))
 	}()
 
 	logs := plog.NewLogs()
@@ -2233,77 +2599,276 @@ func TestExporterBatcher(t *testing.T) {
 	scopeLogs.LogRecords().AppendEmpty().Body().SetStr("log record body")
 
 	type key struct{}
-	_ = exporter.ConsumeLogs(context.WithValue(context.Background(), key{}, "value1"), logs)
-	_ = exporter.ConsumeLogs(context.WithValue(context.Background(), key{}, "value2"), logs)
+	_ = exporter.ConsumeLogs(context.WithValue(t.Context(), key{}, "value1"), logs)
+	_ = exporter.ConsumeLogs(context.WithValue(t.Context(), key{}, "value2"), logs)
 	require.Len(t, requests, 2) // flushed immediately by Consume
 
 	assert.Equal(t, "value1", requests[0].Context().Value(key{}))
 	assert.Equal(t, "value2", requests[1].Context().Value(key{}))
 }
 
+func TestExporterSendingQueueContextPropogation(t *testing.T) {
+	testCtxKey := component.NewID(component.MustNewType("testctxkey"))
+	metadata := client.NewMetadata(map[string][]string{
+		"key_1": {"val_1"},
+		"key_2": {"val_2"},
+	})
+	configSetupFn := func(cfg *Config) {
+		cfg.MetadataKeys = slices.Collect(metadata.Keys())
+		cfg.Auth = configoptional.Some(configauth.Config{
+			AuthenticatorID: testCtxKey,
+		})
+		// Configure sending queue with batching enabled. Batching configuration are
+		// kept such that test can simulate batching and the batch matures on age.
+		cfg.QueueBatchConfig.WaitForResult = false
+		cfg.QueueBatchConfig.BlockOnOverflow = true
+		cfg.QueueBatchConfig.QueueSize = 100 // big enough to accommodate all requests
+		cfg.QueueBatchConfig.NumConsumers = 10
+		batchCfg := cfg.QueueBatchConfig.Batch.Get()
+		batchCfg.FlushTimeout = 100 * time.Millisecond
+		batchCfg.Sizer = exporterhelper.RequestSizerTypeItems
+		batchCfg.MinSize = 100 // big enough to accommodate all requests
+		batchCfg.MaxSize = 1000
+	}
+	setupTestHost := func(t *testing.T) (component.Host, *bulkRecorder) {
+		t.Helper()
+
+		rec := newBulkRecorder()
+		server := newESTestServer(t, func(docs []itemRequest) ([]itemResponse, error) {
+			rec.Record(docs)
+			return itemsAllOK(docs)
+		})
+		esURL, err := url.Parse(server.URL)
+		require.NoError(t, err)
+		return &mockHost{
+			extensions: map[component.ID]component.Component{
+				testCtxKey: newMockAuthClient(func(req *http.Request) (*http.Response, error) {
+					info := client.FromContext(req.Context())
+					for k := range metadata.Keys() {
+						assert.Equal(t, metadata.Get(k), info.Metadata.Get(k))
+					}
+					req.Clone(req.Context())
+					req.URL.Host = esURL.Host
+					req.URL.Scheme = esURL.Scheme
+					req.Host = ""
+					return http.DefaultTransport.RoundTrip(req)
+				}),
+			},
+		}, rec
+	}
+
+	t.Run("metrics", func(t *testing.T) {
+		testHost, rec := setupTestHost(t)
+		exporter := newUnstartedTestMetricsExporter(t, "https://ignored", configSetupFn)
+		require.NoError(t, exporter.Start(t.Context(), testHost))
+		defer func() {
+			require.NoError(t, exporter.Shutdown(t.Context()))
+		}()
+
+		sendMetrics := func(name string) {
+			metrics := pmetric.NewMetrics()
+			resourceMetric := metrics.ResourceMetrics().AppendEmpty()
+			scopeMetric := resourceMetric.ScopeMetrics().AppendEmpty()
+			fooBarMetric := scopeMetric.Metrics().AppendEmpty()
+			fooBarMetric.SetName(name)
+			fooBarMetric.SetEmptySum().DataPoints().AppendEmpty().SetIntValue(0)
+
+			ctx := client.NewContext(t.Context(), client.Info{Metadata: metadata})
+			mustSendMetricsWithCtx(ctx, t, exporter, metrics)
+		}
+
+		sendMetrics("foo.bar.1")
+		sendMetrics("foo.bar.2")
+		rec.WaitItems(1) // both metric should be within a single doc grouped together
+	})
+
+	t.Run("logs", func(t *testing.T) {
+		testHost, rec := setupTestHost(t)
+		exporter := newUnstartedTestLogsExporter(t, "https://ignored", configSetupFn)
+		require.NoError(t, exporter.Start(t.Context(), testHost))
+		defer func() {
+			require.NoError(t, exporter.Shutdown(t.Context()))
+		}()
+
+		sendLogs := func(log string) {
+			logs := plog.NewLogs()
+			resourceLog := logs.ResourceLogs().AppendEmpty()
+			scopeLog := resourceLog.ScopeLogs().AppendEmpty()
+			fooBarLog := scopeLog.LogRecords().AppendEmpty()
+			fooBarLog.Body().SetStr(log)
+
+			ctx := client.NewContext(t.Context(), client.Info{Metadata: metadata})
+			mustSendLogsWithCtx(ctx, t, exporter, logs)
+		}
+
+		sendLogs("log.1")
+		sendLogs("log.2")
+		rec.WaitItems(2) // 2 log documents are expected
+	})
+
+	t.Run("traces", func(t *testing.T) {
+		testHost, rec := setupTestHost(t)
+		exporter := newUnstartedTestTracesExporter(t, "https://ignored", configSetupFn)
+		require.NoError(t, exporter.Start(t.Context(), testHost))
+		defer func() {
+			require.NoError(t, exporter.Shutdown(t.Context()))
+		}()
+
+		sendTraces := func(name string) {
+			traces := ptrace.NewTraces()
+			resourceSpan := traces.ResourceSpans().AppendEmpty()
+			scopeSpan := resourceSpan.ScopeSpans().AppendEmpty()
+			fooBarSpan := scopeSpan.Spans().AppendEmpty()
+			fooBarSpan.SetName(name)
+
+			ctx := client.NewContext(t.Context(), client.Info{Metadata: metadata})
+			mustSendTracesWithCtx(ctx, t, exporter, traces)
+		}
+
+		sendTraces("span.1")
+		sendTraces("span.2")
+		rec.WaitItems(2) // 2 span documents are expected
+	})
+
+	t.Run("profiles", func(t *testing.T) {
+		testHost, rec := setupTestHost(t)
+		exporter := newUnstartedTestProfilesExporter(t, "https://ignored", configSetupFn)
+		require.NoError(t, exporter.Start(t.Context(), testHost))
+		defer func() {
+			require.NoError(t, exporter.Shutdown(t.Context()))
+		}()
+
+		sendProfiles := func() {
+			profiles := pprofile.NewProfiles()
+			dic := profiles.Dictionary()
+			resource := profiles.ResourceProfiles().AppendEmpty()
+			scope := resource.ScopeProfiles().AppendEmpty()
+			profile := scope.Profiles().AppendEmpty()
+
+			dic.StringTable().Append("samples", "count", "cpu", "nanoseconds")
+			st := profile.SampleType()
+			st.SetTypeStrindex(0)
+			st.SetUnitStrindex(1)
+			pt := profile.PeriodType()
+			pt.SetTypeStrindex(2)
+			pt.SetUnitStrindex(3)
+
+			a := dic.AttributeTable().AppendEmpty()
+			a.SetKeyStrindex(4)
+			dic.StringTable().Append("process.executable.build_id.htlhash")
+			a.Value().SetStr("600DCAFE4A110000F2BF38C493F5FB92")
+			a = dic.AttributeTable().AppendEmpty()
+			a.SetKeyStrindex(5)
+			dic.StringTable().Append("profile.frame.type")
+			a.Value().SetStr("native")
+			a = dic.AttributeTable().AppendEmpty()
+			a.SetKeyStrindex(6)
+			dic.StringTable().Append("host.id")
+			a.Value().SetStr("localhost")
+
+			profile.AttributeIndices().Append(2)
+
+			sample := profile.Sample().AppendEmpty()
+			sample.TimestampsUnixNano().Append(0)
+
+			stack := dic.StackTable().AppendEmpty()
+			stack.LocationIndices().Append(0)
+
+			m := dic.MappingTable().AppendEmpty()
+			m.AttributeIndices().Append(0)
+
+			l := dic.LocationTable().AppendEmpty()
+			l.SetMappingIndex(0)
+			l.SetAddress(111)
+			l.AttributeIndices().Append(1)
+
+			ctx := client.NewContext(t.Context(), client.Info{Metadata: metadata})
+			mustSendProfilesWithCtx(ctx, t, exporter, profiles)
+		}
+
+		sendProfiles()
+		sendProfiles()
+		rec.WaitItems(5) // 5 profile documents are expected in total
+	})
+}
+
 func newTestTracesExporter(t *testing.T, url string, fns ...func(*Config)) exporter.Traces {
+	exp := newUnstartedTestTracesExporter(t, url, fns...)
+	err := exp.Start(t.Context(), componenttest.NewNopHost())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, exp.Shutdown(context.WithoutCancel(t.Context())))
+	})
+	return exp
+}
+
+func newUnstartedTestTracesExporter(t *testing.T, url string, fns ...func(*Config)) exporter.Traces {
 	f := NewFactory()
 	cfg := withDefaultConfig(append([]func(*Config){func(cfg *Config) {
 		cfg.Endpoints = []string{url}
-		cfg.NumWorkers = 1
-		cfg.Flush.Interval = 10 * time.Millisecond
+		cfg.QueueBatchConfig.NumConsumers = 1
+		// Batch is configured by default so we can directly edit flush timeout
+		cfg.QueueBatchConfig.Batch.Get().FlushTimeout = 10 * time.Millisecond
 	}}, fns...)...)
 	require.NoError(t, xconfmap.Validate(cfg))
-	exp, err := f.CreateTraces(context.Background(), exportertest.NewNopSettings(metadata.Type), cfg)
+	exp, err := f.CreateTraces(t.Context(), exportertest.NewNopSettings(metadata.Type), cfg)
 	require.NoError(t, err)
-
-	err = exp.Start(context.Background(), componenttest.NewNopHost())
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, exp.Shutdown(context.Background()))
-	})
 	return exp
 }
 
 func newTestProfilesExporter(t *testing.T, url string, fns ...func(*Config)) xexporter.Profiles {
-	f := NewFactory().(xexporter.Factory)
-	cfg := withDefaultConfig(append([]func(*Config){func(cfg *Config) {
-		cfg.Endpoints = []string{url}
-		cfg.NumWorkers = 1
-		cfg.Flush.Interval = 10 * time.Millisecond
-	}}, fns...)...)
-	require.NoError(t, xconfmap.Validate(cfg))
-	exp, err := f.CreateProfiles(context.Background(), exportertest.NewNopSettings(metadata.Type), cfg)
-	require.NoError(t, err)
-
-	err = exp.Start(context.Background(), componenttest.NewNopHost())
+	exp := newUnstartedTestProfilesExporter(t, url, fns...)
+	err := exp.Start(t.Context(), componenttest.NewNopHost())
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		require.NoError(t, exp.Shutdown(context.Background()))
+		require.NoError(t, exp.Shutdown(context.Background())) //nolint:usetesting
 	})
 	return exp
 }
 
+func newUnstartedTestProfilesExporter(t *testing.T, url string, fns ...func(*Config)) xexporter.Profiles {
+	f := NewFactory().(xexporter.Factory)
+	cfg := withDefaultConfig(append([]func(*Config){func(cfg *Config) {
+		cfg.Endpoints = []string{url}
+		cfg.QueueBatchConfig.NumConsumers = 1
+		// Batch is configured by default so we can directly edit flush timeout
+		cfg.QueueBatchConfig.Batch.Get().FlushTimeout = 10 * time.Millisecond
+	}}, fns...)...)
+	require.NoError(t, xconfmap.Validate(cfg))
+	exp, err := f.CreateProfiles(t.Context(), exportertest.NewNopSettings(metadata.Type), cfg)
+	require.NoError(t, err)
+	return exp
+}
+
 func newTestMetricsExporter(t *testing.T, url string, fns ...func(*Config)) exporter.Metrics {
+	exp := newUnstartedTestMetricsExporter(t, url, fns...)
+	require.NoError(t, exp.Start(t.Context(), componenttest.NewNopHost()))
+	t.Cleanup(func() {
+		require.NoError(t, exp.Shutdown(context.Background())) //nolint:usetesting
+	})
+	return exp
+}
+
+func newUnstartedTestMetricsExporter(t *testing.T, url string, fns ...func(*Config)) exporter.Metrics {
 	f := NewFactory()
 	cfg := withDefaultConfig(append([]func(*Config){func(cfg *Config) {
 		cfg.Endpoints = []string{url}
-		cfg.NumWorkers = 1
-		cfg.Flush.Interval = 10 * time.Millisecond
+		cfg.QueueBatchConfig.NumConsumers = 1
+		// Batch is configured by default so we can directly edit flush timeout
+		cfg.QueueBatchConfig.Batch.Get().FlushTimeout = 10 * time.Millisecond
 	}}, fns...)...)
 	require.NoError(t, xconfmap.Validate(cfg))
-	exp, err := f.CreateMetrics(context.Background(), exportertest.NewNopSettings(metadata.Type), cfg)
+	exp, err := f.CreateMetrics(t.Context(), exportertest.NewNopSettings(metadata.Type), cfg)
 	require.NoError(t, err)
-
-	err = exp.Start(context.Background(), componenttest.NewNopHost())
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, exp.Shutdown(context.Background()))
-	})
 	return exp
 }
 
 func newTestLogsExporter(t *testing.T, url string, fns ...func(*Config)) exporter.Logs {
 	exp := newUnstartedTestLogsExporter(t, url, fns...)
-	err := exp.Start(context.Background(), componenttest.NewNopHost())
+	err := exp.Start(t.Context(), componenttest.NewNopHost())
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		require.NoError(t, exp.Shutdown(context.Background()))
+		require.NoError(t, exp.Shutdown(context.Background())) //nolint:usetesting
 	})
 	return exp
 }
@@ -2312,11 +2877,12 @@ func newUnstartedTestLogsExporter(t *testing.T, url string, fns ...func(*Config)
 	f := NewFactory()
 	cfg := withDefaultConfig(append([]func(*Config){func(cfg *Config) {
 		cfg.Endpoints = []string{url}
-		cfg.NumWorkers = 1
-		cfg.Flush.Interval = 10 * time.Millisecond
+		cfg.QueueBatchConfig.NumConsumers = 1
+		// Batch is defined as default configuration
+		cfg.QueueBatchConfig.Batch.Get().FlushTimeout = 10 * time.Millisecond
 	}}, fns...)...)
 	require.NoError(t, xconfmap.Validate(cfg))
-	exp, err := f.CreateLogs(context.Background(), exportertest.NewNopSettings(metadata.Type), cfg)
+	exp, err := f.CreateLogs(t.Context(), exportertest.NewNopSettings(metadata.Type), cfg)
 	require.NoError(t, err)
 	return exp
 }
@@ -2332,18 +2898,29 @@ func mustSendLogRecords(t *testing.T, exporter exporter.Logs, records ...plog.Lo
 }
 
 func mustSendLogs(t *testing.T, exporter exporter.Logs, logs plog.Logs) {
-	logs.MarkReadOnly()
-	err := exporter.ConsumeLogs(context.Background(), logs)
+	mustSendLogsWithCtx(t.Context(), t, exporter, logs)
+}
+
+func mustSendLogsWithCtx(
+	ctx context.Context,
+	t *testing.T,
+	exporter exporter.Logs,
+	logs plog.Logs,
+) {
+	if !exporter.Capabilities().MutatesData {
+		logs.MarkReadOnly()
+	}
+	err := exporter.ConsumeLogs(ctx, logs)
 	require.NoError(t, err)
 }
 
 func mustSendMetricSumDataPoints(t *testing.T, exporter exporter.Metrics, dataPoints ...pmetric.NumberDataPoint) {
 	metrics := pmetric.NewMetrics()
 	scopeMetrics := metrics.ResourceMetrics().AppendEmpty().ScopeMetrics().AppendEmpty()
+	metric := scopeMetrics.Metrics().AppendEmpty()
+	metric.SetEmptySum()
+	metric.SetName("sum")
 	for _, dataPoint := range dataPoints {
-		metric := scopeMetrics.Metrics().AppendEmpty()
-		metric.SetEmptySum()
-		metric.SetName("sum")
 		dataPoint.CopyTo(metric.Sum().DataPoints().AppendEmpty())
 	}
 	mustSendMetrics(t, exporter, metrics)
@@ -2352,18 +2929,29 @@ func mustSendMetricSumDataPoints(t *testing.T, exporter exporter.Metrics, dataPo
 func mustSendMetricGaugeDataPoints(t *testing.T, exporter exporter.Metrics, dataPoints ...pmetric.NumberDataPoint) {
 	metrics := pmetric.NewMetrics()
 	scopeMetrics := metrics.ResourceMetrics().AppendEmpty().ScopeMetrics().AppendEmpty()
+	metric := scopeMetrics.Metrics().AppendEmpty()
+	metric.SetEmptyGauge()
+	metric.SetName("gauge")
 	for _, dataPoint := range dataPoints {
-		metric := scopeMetrics.Metrics().AppendEmpty()
-		metric.SetEmptyGauge()
-		metric.SetName("gauge")
 		dataPoint.CopyTo(metric.Gauge().DataPoints().AppendEmpty())
 	}
 	mustSendMetrics(t, exporter, metrics)
 }
 
 func mustSendMetrics(t *testing.T, exporter exporter.Metrics, metrics pmetric.Metrics) {
-	metrics.MarkReadOnly()
-	err := exporter.ConsumeMetrics(context.Background(), metrics)
+	mustSendMetricsWithCtx(t.Context(), t, exporter, metrics)
+}
+
+func mustSendMetricsWithCtx(
+	ctx context.Context,
+	t *testing.T,
+	exporter exporter.Metrics,
+	metrics pmetric.Metrics,
+) {
+	if !exporter.Capabilities().MutatesData {
+		metrics.MarkReadOnly()
+	}
+	err := exporter.ConsumeMetrics(ctx, metrics)
 	require.NoError(t, err)
 }
 
@@ -2378,8 +2966,32 @@ func mustSendSpans(t *testing.T, exporter exporter.Traces, spans ...ptrace.Span)
 }
 
 func mustSendTraces(t *testing.T, exporter exporter.Traces, traces ptrace.Traces) {
-	traces.MarkReadOnly()
-	err := exporter.ConsumeTraces(context.Background(), traces)
+	mustSendTracesWithCtx(t.Context(), t, exporter, traces)
+}
+
+func mustSendTracesWithCtx(
+	ctx context.Context,
+	t *testing.T,
+	exporter exporter.Traces,
+	traces ptrace.Traces,
+) {
+	if !exporter.Capabilities().MutatesData {
+		traces.MarkReadOnly()
+	}
+	err := exporter.ConsumeTraces(ctx, traces)
+	require.NoError(t, err)
+}
+
+func mustSendProfilesWithCtx(
+	ctx context.Context,
+	t *testing.T,
+	exporter xexporter.Profiles,
+	profiles pprofile.Profiles,
+) {
+	if !exporter.Capabilities().MutatesData {
+		profiles.MarkReadOnly()
+	}
+	err := exporter.ConsumeProfiles(ctx, profiles)
 	require.NoError(t, err)
 }
 

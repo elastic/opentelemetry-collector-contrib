@@ -6,7 +6,7 @@ package internal
 import (
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pmetric"
-	semconv "go.opentelemetry.io/collector/semconv/v1.27.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.27.0"
 )
 
 type kv struct {
@@ -35,8 +35,8 @@ func metricsFromResourceMetrics(metrics ...pmetric.ResourceMetrics) pmetric.Metr
 
 func resourceMetrics(job, instance string, metrics ...pmetric.Metric) pmetric.ResourceMetrics {
 	mr := pmetric.NewResourceMetrics()
-	mr.Resource().Attributes().PutStr(semconv.AttributeServiceName, job)
-	mr.Resource().Attributes().PutStr(semconv.AttributeServiceInstanceID, instance)
+	mr.Resource().Attributes().PutStr(string(semconv.ServiceNameKey), job)
+	mr.Resource().Attributes().PutStr(string(semconv.ServiceInstanceIDKey), instance)
 	ms := mr.ScopeMetrics().AppendEmpty().Metrics()
 
 	for _, metric := range metrics {
@@ -184,7 +184,7 @@ func exponentialHistogramPointSimplified(attributes []*kv, startTimestamp, times
 
 	var sum float64
 	var count uint64
-	for i := 0; i < bucketCount; i++ {
+	for i := range bucketCount {
 		positive.BucketCounts().Append(uint64(i + 1))
 		negative.BucketCounts().Append(uint64(i + 1))
 		count += uint64(i+1) + uint64(i+1)
@@ -268,7 +268,7 @@ func summaryPoint(attributes []*kv, startTimestamp, timestamp pcommon.Timestamp,
 	sdp.SetSum(sum)
 
 	qvL := sdp.QuantileValues()
-	for i := 0; i < len(quantiles); i++ {
+	for i := range quantiles {
 		qvi := qvL.AppendEmpty()
 		qvi.SetQuantile(quantiles[i])
 		qvi.SetValue(values[i])

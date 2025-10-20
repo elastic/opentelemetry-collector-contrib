@@ -6,7 +6,7 @@ package ec2
 import (
 	"bytes"
 	"context"
-	"fmt"
+	"errors"
 	"io"
 	"reflect"
 	"testing"
@@ -104,7 +104,7 @@ func TestGetMetadataFromImds(t *testing.T) {
 				return mockGetMetadataAPI(func(_ context.Context, params *imds.GetMetadataInput, _ ...func(*imds.Options)) (*imds.GetMetadataOutput, error) {
 					t.Helper()
 					if params.Path == "" {
-						return nil, fmt.Errorf("Path cannot be empty")
+						return nil, errors.New("Path cannot be empty")
 					}
 					return nil, nil
 				})
@@ -117,7 +117,7 @@ func TestGetMetadataFromImds(t *testing.T) {
 
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.TODO()
+			ctx := t.Context()
 			content, err := GetMetadataFromImds(ctx, tt.client(t), tt.path)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("expected error: %v, got: %v", tt.wantErr, err)
@@ -185,7 +185,7 @@ func TestInstanceIdentityDocumentFromImds(t *testing.T) {
 
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.TODO()
+			ctx := t.Context()
 			document, err := GetInstanceIdentityDocumentFromImds(ctx, tt.client(t))
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("expected error: %v, got: %v", tt.wantErr, err)

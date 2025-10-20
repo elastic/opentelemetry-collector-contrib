@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/google/go-github/v70/github"
+	"github.com/google/go-github/v76/github"
 	"github.com/gorilla/mux"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componentstatus"
@@ -47,7 +47,7 @@ func newTracesReceiver(
 	}
 
 	transport := "http"
-	if config.WebHook.TLSSetting != nil {
+	if config.WebHook.TLS.HasValue() {
 		transport = "https"
 	}
 
@@ -129,7 +129,7 @@ func (gtr *githubTracesReceiver) Shutdown(_ context.Context) error {
 	return err
 }
 
-// handleReq handles incoming request sent to the webhook endoint. On success
+// handleReq handles incoming request sent to the webhook endpoint. On success
 // returns a 200 response code.
 func (gtr *githubTracesReceiver) handleReq(w http.ResponseWriter, req *http.Request) {
 	ctx := gtr.obsrecv.StartTracesOp(req.Context())
@@ -188,7 +188,7 @@ func (gtr *githubTracesReceiver) handleReq(w http.ResponseWriter, req *http.Requ
 }
 
 // Simple healthcheck endpoint.
-func (gtr *githubTracesReceiver) handleHealthCheck(w http.ResponseWriter, _ *http.Request) {
+func (*githubTracesReceiver) handleHealthCheck(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Add("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 

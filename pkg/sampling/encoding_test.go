@@ -5,7 +5,7 @@ package sampling
 
 import (
 	"encoding/binary"
-	"fmt"
+	"errors"
 	"math/rand/v2"
 	"strconv"
 	"testing"
@@ -43,7 +43,7 @@ func must[T any](t T, err error) T {
 //	require.Error(t, value)
 func mustNot[T any](_ T, err error) error {
 	if err == nil {
-		return fmt.Errorf("expected an error, got nil")
+		return errors.New("expected an error, got nil")
 	}
 	return err
 }
@@ -284,10 +284,10 @@ func BenchmarkThresholdCompareAsUint64(b *testing.B) {
 	}
 
 	b.ReportAllocs()
-	b.ResetTimer()
+
 	yes := 0
 	no := 0
-	for i := 0; i < b.N; i++ {
+	for i := 0; b.Loop(); i++ {
 		idx := i % len(tids)
 		tid := tids[idx]
 		comp := comps[idx]

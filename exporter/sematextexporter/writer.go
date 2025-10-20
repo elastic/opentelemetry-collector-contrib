@@ -64,7 +64,7 @@ func newSematextHTTPWriter(logger common.Logger, config *Config, telemetrySettin
 		payloadMaxBytes:   config.PayloadMaxBytes,
 		logger:            logger,
 		hostname:          hostname,
-		token:             config.AppToken,
+		token:             config.MetricsConfig.AppToken,
 	}, nil
 }
 
@@ -188,7 +188,8 @@ func (b *sematextHTTPWriterBatch) WriteBatch(ctx context.Context) error {
 		return err
 	}
 
-	if err = res.Body.Close(); err != nil {
+	err = res.Body.Close()
+	if err != nil {
 		return err
 	}
 
@@ -273,5 +274,5 @@ func (b *sematextHTTPWriterBatch) convertFields(m map[string]any) (fields map[st
 			fields[k] = lpv
 		}
 	}
-	return
+	return fields
 }

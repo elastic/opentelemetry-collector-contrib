@@ -4,6 +4,7 @@
 package ottlfuncs // import "github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ottlfuncs"
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -23,7 +24,7 @@ func createIsValidLuhnFunction[K any](_ ottl.FunctionContext, oArgs ottl.Argumen
 	args, ok := oArgs.(*IsValidLuhnArguments[K])
 
 	if !ok {
-		return nil, fmt.Errorf("IsValidLuhnFactory args must be of type *IsValidLuhnArguments[K]")
+		return nil, errors.New("IsValidLuhnFactory args must be of type *IsValidLuhnArguments[K]")
 	}
 
 	return isValidLuhnFunc(args.Target), nil
@@ -44,7 +45,7 @@ func isValidLuhnFunc[K any](target ottl.StringLikeGetter[K]) ottl.ExprFunc[K] {
 		trimmedNumber := strings.ReplaceAll(*value, " ", "")
 
 		// return false if the value is an empty string
-		if len(trimmedNumber) == 0 {
+		if trimmedNumber == "" {
 			return false, nil
 		}
 

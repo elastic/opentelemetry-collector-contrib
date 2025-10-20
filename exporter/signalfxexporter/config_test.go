@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cenkalti/backoff/v4"
+	"github.com/cenkalti/backoff/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
@@ -62,6 +62,7 @@ func TestLoadConfig(t *testing.T) {
 					IdleConnTimeout:      idleConnTimeout,
 					HTTP2ReadIdleTimeout: 10 * time.Second,
 					HTTP2PingTimeout:     10 * time.Second,
+					ForceAttemptHTTP2:    true,
 				},
 				BackOffConfig: configretry.BackOffConfig{
 					Enabled:             true,
@@ -98,6 +99,7 @@ func TestLoadConfig(t *testing.T) {
 						MaxIdleConnsPerHost: defaultMaxIdleConnsPerHost,
 						MaxConnsPerHost:     defaultMaxConnsPerHost,
 						IdleConnTimeout:     defaultIdleConnTimeout,
+						ForceAttemptHTTP2:   true,
 					},
 					StaleServiceTimeout: 5 * time.Minute,
 					SyncAttributes: map[string]string{
@@ -134,6 +136,7 @@ func TestLoadConfig(t *testing.T) {
 					IdleConnTimeout:      idleConnTimeout,
 					HTTP2ReadIdleTimeout: 10 * time.Second,
 					HTTP2PingTimeout:     10 * time.Second,
+					ForceAttemptHTTP2:    true,
 				},
 				BackOffConfig: configretry.BackOffConfig{
 					Enabled:             true,
@@ -143,12 +146,14 @@ func TestLoadConfig(t *testing.T) {
 					RandomizationFactor: backoff.DefaultRandomizationFactor,
 					Multiplier:          backoff.DefaultMultiplier,
 				},
-				QueueSettings: exporterhelper.QueueBatchConfig{
-					Enabled:      true,
-					NumConsumers: 2,
-					QueueSize:    10,
-					Sizer:        exporterhelper.RequestSizerTypeRequests,
-				}, AccessTokenPassthroughConfig: splunk.AccessTokenPassthroughConfig{
+				QueueSettings: func() exporterhelper.QueueBatchConfig {
+					queue := exporterhelper.NewDefaultQueueConfig()
+					queue.Enabled = true
+					queue.NumConsumers = 2
+					queue.QueueSize = 10
+					return queue
+				}(),
+				AccessTokenPassthroughConfig: splunk.AccessTokenPassthroughConfig{
 					AccessTokenPassthrough: false,
 				},
 				LogDimensionUpdates: true,
@@ -231,6 +236,7 @@ func TestLoadConfig(t *testing.T) {
 						MaxIdleConnsPerHost: defaultMaxIdleConnsPerHost,
 						MaxConnsPerHost:     defaultMaxConnsPerHost,
 						IdleConnTimeout:     defaultIdleConnTimeout,
+						ForceAttemptHTTP2:   true,
 					},
 					StaleServiceTimeout: 5 * time.Minute,
 					SyncAttributes: map[string]string{
@@ -455,6 +461,15 @@ func TestConfigValidateErrors(t *testing.T) {
 					Enabled:   true,
 					QueueSize: -1,
 				},
+			},
+		},
+		{
+			name: "Invalid root_path",
+			cfg: &Config{
+				Realm:            "us0",
+				AccessToken:      "access_token",
+				RootPath:         "/foobar",
+				SyncHostMetadata: true,
 			},
 		},
 	}

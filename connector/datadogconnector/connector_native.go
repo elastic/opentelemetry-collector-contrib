@@ -6,28 +6,34 @@ package datadogconnector // import "github.com/open-telemetry/opentelemetry-coll
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/DataDog/datadog-agent/comp/otelcol/otlp/components/statsprocessor"
 	"github.com/DataDog/datadog-agent/pkg/obfuscate"
+	"github.com/DataDog/datadog-agent/pkg/opentelemetry-mapping-go/otlp/attributes"
+	"github.com/DataDog/datadog-agent/pkg/opentelemetry-mapping-go/otlp/metrics"
 	pb "github.com/DataDog/datadog-agent/pkg/proto/pbgo/trace"
 	"github.com/DataDog/datadog-agent/pkg/trace/config"
 	"github.com/DataDog/datadog-agent/pkg/trace/stats"
 	"github.com/DataDog/datadog-go/v5/statsd"
-	"github.com/DataDog/opentelemetry-mapping-go/pkg/otlp/attributes"
-	"github.com/DataDog/opentelemetry-mapping-go/pkg/otlp/metrics"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/pdata/ptrace"
 	"go.opentelemetry.io/otel/metric/noop"
 	"go.uber.org/zap"
+
+	datadogconfig "github.com/open-telemetry/opentelemetry-collector-contrib/pkg/datadog/config"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/datadog/featuregates"
 )
 
 // traceToMetricConnectorNative is the schema for connector
 type traceToMetricConnectorNative struct {
 	metricsConsumer consumer.Metrics // the next component in the pipeline to ingest metrics after connector
 	logger          *zap.Logger
+
+	wg sync.WaitGroup
 
 	// concentrator ingests spans and produces APM stats
 	concentrator *stats.Concentrator
@@ -96,10 +102,43 @@ func newTraceToMetricConnectorNative(set component.TelemetrySettings, cfg compon
 	}, nil
 }
 
+func getTraceAgentCfg(logger *zap.Logger, cfg datadogconfig.TracesConnectorConfig, attributesTranslator *attributes.Translator) *config.AgentConfig {
+	acfg := config.New()
+	acfg.OTLPReceiver.AttributesTranslator = attributesTranslator
+	acfg.OTLPReceiver.SpanNameRemappings = cfg.SpanNameRemappings
+	acfg.OTLPReceiver.SpanNameAsResourceName = cfg.SpanNameAsResourceName
+	acfg.Ignore["resource"] = cfg.IgnoreResources
+	acfg.ComputeStatsBySpanKind = cfg.ComputeStatsBySpanKind
+	acfg.PeerTagsAggregation = cfg.PeerTagsAggregation
+	acfg.PeerTags = cfg.PeerTags
+	if len(cfg.ResourceAttributesAsContainerTags) > 0 {
+		acfg.Features["enable_cid_stats"] = struct{}{}
+		delete(acfg.Features, "disable_cid_stats")
+	}
+	if v := cfg.TraceBuffer; v > 0 {
+		acfg.TraceBuffer = v
+	}
+	if cfg.ComputeTopLevelBySpanKind {
+		logger.Info("traces::compute_top_level_by_span_kind needs to be enabled in both the Datadog connector and Datadog exporter configs if both components are being used")
+		acfg.Features["enable_otlp_compute_top_level_by_span_kind"] = struct{}{}
+	}
+	if !featuregates.ReceiveResourceSpansV2FeatureGate.IsEnabled() {
+		acfg.Features["disable_receive_resource_spans_v2"] = struct{}{}
+	}
+	if !featuregates.OperationAndResourceNameV2FeatureGate.IsEnabled() {
+		acfg.Features["disable_operation_and_resource_name_logic_v2"] = struct{}{}
+	}
+	if v := cfg.BucketInterval; v > 0 {
+		acfg.BucketInterval = v
+	}
+	return acfg
+}
+
 // Start implements the component.Component interface.
-func (c *traceToMetricConnectorNative) Start(_ context.Context, _ component.Host) error {
+func (c *traceToMetricConnectorNative) Start(context.Context, component.Host) error {
 	c.logger.Info("Starting datadogconnector")
 	c.concentrator.Start()
+	c.wg.Add(1)
 	go c.run()
 	c.isStarted = true
 	return nil
@@ -117,14 +156,14 @@ func (c *traceToMetricConnectorNative) Shutdown(context.Context) error {
 	// stop the obfuscator and concentrator and wait for the run loop to exit
 	c.obfuscator.Stop()
 	c.concentrator.Stop()
-	c.exit <- struct{}{} // signal exit
-	<-c.exit             // wait for close
+	close(c.exit)
+	c.wg.Wait()
 	return nil
 }
 
 // Capabilities implements the consumer interface.
 // tells use whether the component(connector) will mutate the data passed into it. if set to true the connector does modify the data
-func (c *traceToMetricConnectorNative) Capabilities() consumer.Capabilities {
+func (*traceToMetricConnectorNative) Capabilities() consumer.Capabilities {
 	return consumer.Capabilities{MutatesData: false}
 }
 
@@ -139,7 +178,7 @@ func (c *traceToMetricConnectorNative) ConsumeTraces(_ context.Context, traces p
 // run awaits incoming stats resulting from the agent's ingestion, converts them
 // to metrics and flushes them using the configured metrics exporter.
 func (c *traceToMetricConnectorNative) run() {
-	defer close(c.exit)
+	defer c.wg.Done()
 	for {
 		select {
 		case stats := <-c.statsout:

@@ -13,11 +13,11 @@ import (
 // PlaintextConfig holds the configuration for the plaintext parser.
 type PlaintextConfig struct{}
 
-var _ (ParserConfig) = (*PlaintextConfig)(nil)
+var _ ParserConfig = (*PlaintextConfig)(nil)
 
 // BuildParser creates a new Parser instance that receives plaintext
 // Carbon data.
-func (p *PlaintextConfig) BuildParser() (Parser, error) {
+func (*PlaintextConfig) BuildParser() (Parser, error) {
 	pathParser := &PlaintextPathParser{}
 	return NewParser(pathParser)
 }
@@ -37,7 +37,7 @@ type PlaintextPathParser struct{}
 //
 // tag is of the form "key=val", where key can contain any char except ";!^=" and
 // val can contain any char except ";~".
-func (p *PlaintextPathParser) ParsePath(path string, parsedPath *ParsedPath) error {
+func (*PlaintextPathParser) ParsePath(path string, parsedPath *ParsedPath) error {
 	parts := strings.SplitN(path, ";", 2)
 	if len(parts) < 1 || parts[0] == "" {
 		return fmt.Errorf("empty metric name extracted from path [%s]", path)
@@ -55,8 +55,7 @@ func (p *PlaintextPathParser) ParsePath(path string, parsedPath *ParsedPath) err
 		return nil
 	}
 
-	tags := strings.Split(parts[1], ";")
-	for _, tag := range tags {
+	for tag := range strings.SplitSeq(parts[1], ";") {
 		idx := strings.IndexByte(tag, '=')
 		if idx < 1 {
 			return fmt.Errorf("cannot parse metric path [%s]: incorrect key value separator for [%s]", path, tag)

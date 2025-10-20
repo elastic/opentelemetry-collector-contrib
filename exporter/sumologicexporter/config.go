@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/collector/config/configauth"
 	"go.opentelemetry.io/collector/config/configcompression"
 	"go.opentelemetry.io/collector/config/confighttp"
+	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/config/configretry"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
 
@@ -66,9 +67,9 @@ func createDefaultClientConfig() confighttp.ClientConfig {
 	clientConfig := confighttp.NewDefaultClientConfig()
 	clientConfig.Timeout = defaultTimeout
 	clientConfig.Compression = DefaultCompressEncoding
-	clientConfig.Auth = &configauth.Authentication{
+	clientConfig.Auth = configoptional.Some(configauth.Config{
 		AuthenticatorID: component.NewID(sumologicextension.NewFactory().Type()),
-	}
+	})
 	return clientConfig
 }
 
@@ -103,14 +104,14 @@ func (cfg *Config) Validate() error {
 	case OTLPMetricFormat:
 	case PrometheusFormat:
 	case RemovedGraphiteFormat:
-		return fmt.Errorf("support for the graphite metric format was removed, please use prometheus or otlp instead")
+		return errors.New("support for the graphite metric format was removed, please use prometheus or otlp instead")
 	case RemovedCarbon2Format:
-		return fmt.Errorf("support for the carbon2 metric format was removed, please use prometheus or otlp instead")
+		return errors.New("support for the carbon2 metric format was removed, please use prometheus or otlp instead")
 	default:
 		return fmt.Errorf("unexpected metric format: %s", cfg.MetricFormat)
 	}
 
-	if len(cfg.Endpoint) == 0 && cfg.Auth == nil {
+	if cfg.Endpoint == "" && !cfg.Auth.HasValue() {
 		return errors.New("no endpoint and no auth extension specified")
 	}
 

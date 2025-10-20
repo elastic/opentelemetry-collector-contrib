@@ -4,7 +4,6 @@
 package statsdreceiver
 
 import (
-	"context"
 	"errors"
 	"runtime"
 	"testing"
@@ -52,16 +51,16 @@ func Test_statsdreceiver_Start(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			receiver, err := newReceiver(receivertest.NewNopSettings(metadata.Type), tt.args.config, tt.args.nextConsumer)
 			require.NoError(t, err)
-			err = receiver.Start(context.Background(), componenttest.NewNopHost())
+			err = receiver.Start(t.Context(), componenttest.NewNopHost())
 			assert.Equal(t, tt.wantErr, err)
 
-			assert.NoError(t, receiver.Shutdown(context.Background()))
+			assert.NoError(t, receiver.Shutdown(t.Context()))
 		})
 	}
 }
 
 func TestStatsdReceiver_ShutdownBeforeStart(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := createDefaultConfig().(*Config)
 	nextConsumer := consumertest.NewNop()
 	rcv, err := newReceiver(receivertest.NewNopSettings(metadata.Type), *cfg, nextConsumer)
@@ -71,7 +70,7 @@ func TestStatsdReceiver_ShutdownBeforeStart(t *testing.T) {
 }
 
 func TestStatsdReceiver_Flush(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := createDefaultConfig().(*Config)
 	nextConsumer := consumertest.NewNop()
 	rcv, err := newReceiver(receivertest.NewNopSettings(metadata.Type), *cfg, nextConsumer)
@@ -99,6 +98,7 @@ func Test_statsdreceiver_EndToEnd(t *testing.T) {
 						Endpoint:  defaultBindEndpoint,
 						Transport: confignet.TransportTypeUDP,
 					},
+					SocketPermissions:   defaultSocketPermissions,
 					AggregationInterval: 4 * time.Second,
 				}
 			},
@@ -117,6 +117,7 @@ func Test_statsdreceiver_EndToEnd(t *testing.T) {
 						Endpoint:  "/tmp/statsd_test.sock",
 						Transport: confignet.TransportTypeUnixgram,
 					},
+					SocketPermissions:   defaultSocketPermissions,
 					AggregationInterval: 4 * time.Second,
 				}
 			},
@@ -139,9 +140,9 @@ func Test_statsdreceiver_EndToEnd(t *testing.T) {
 			require.NoError(t, err)
 			r := rcv.(*statsdReceiver)
 
-			require.NoError(t, r.Start(context.Background(), componenttest.NewNopHost()))
+			require.NoError(t, r.Start(t.Context(), componenttest.NewNopHost()))
 			defer func() {
-				assert.NoError(t, r.Shutdown(context.Background()))
+				assert.NoError(t, r.Shutdown(t.Context()))
 			}()
 
 			statsdClient := tt.clientFn(t, tt.addr)

@@ -4,10 +4,11 @@
 package datasetexporter // import "github.com/open-telemetry/opentelemetry-collector-contrib/exporter/datasetexporter"
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
-	"github.com/cenkalti/backoff/v4"
+	"github.com/cenkalti/backoff/v5"
 	"github.com/scalyr/dataset-go/pkg/buffer"
 	"github.com/scalyr/dataset-go/pkg/buffer_config"
 	datasetConfig "github.com/scalyr/dataset-go/pkg/config"
@@ -184,10 +185,10 @@ func (c *Config) Unmarshal(conf *confmap.Conf) error {
 // If any of the required fields are missing or have invalid values, it returns an error.
 func (c *Config) Validate() error {
 	if c.APIKey == "" {
-		return fmt.Errorf("api_key is required")
+		return errors.New("api_key is required")
 	}
 	if c.DatasetURL == "" {
-		return fmt.Errorf("dataset_url is required")
+		return errors.New("dataset_url is required")
 	}
 
 	return nil
@@ -211,8 +212,8 @@ func (c *Config) String() string {
 	return s
 }
 
-func (c *Config) convert() *ExporterConfig {
-	return &ExporterConfig{
+func (c *Config) convert() *exporterConfig {
+	return &exporterConfig{
 		datasetConfig: &datasetConfig.DataSetConfig{
 			Endpoint: c.DatasetURL,
 			Tokens:   datasetConfig.DataSetTokens{WriteLog: string(c.APIKey)},
@@ -241,7 +242,7 @@ func (c *Config) convert() *ExporterConfig {
 	}
 }
 
-type ExporterConfig struct {
+type exporterConfig struct {
 	datasetConfig      *datasetConfig.DataSetConfig
 	tracesSettings     TracesSettings
 	logsSettings       LogsSettings

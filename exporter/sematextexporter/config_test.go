@@ -10,7 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cenkalti/backoff/v4"
+	"github.com/cenkalti/backoff/v5"
+	"github.com/influxdata/influxdb-observability/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
@@ -31,6 +32,7 @@ func TestLoadConfig(t *testing.T) {
 	require.NoError(t, err)
 
 	contentStr := strings.ReplaceAll(string(content), "<METRICS_APP_TOKEN>", metricsAppToken)
+	contentStr = strings.ReplaceAll(contentStr, "<LOGS_APP_TOKEN>", logsAppToken)
 
 	tmpConfigPath := filepath.Join("testdata", "config_tmp.yaml")
 	err = os.WriteFile(tmpConfigPath, []byte(contentStr), 0o600)
@@ -53,18 +55,23 @@ func TestLoadConfig(t *testing.T) {
 					Timeout: 500 * time.Millisecond,
 					Headers: map[string]configopaque.String{"User-Agent": "OpenTelemetry -> Sematext"},
 				},
-				QueueSettings: exporterhelper.QueueBatchConfig{
-					Enabled:      true,
-					NumConsumers: 3,
-					QueueSize:    10,
-					Sizer:        exporterhelper.RequestSizerTypeRequests,
-				},
+				QueueSettings: func() exporterhelper.QueueBatchConfig {
+					queue := exporterhelper.NewDefaultQueueConfig()
+					queue.Enabled = true
+					queue.NumConsumers = 3
+					queue.QueueSize = 10
+					return queue
+				}(),
 				MetricsConfig: MetricsConfig{
 					MetricsEndpoint: usMetricsEndpoint,
 					AppToken:        metricsAppToken,
-					MetricsSchema:   "telegraf-prometheus-v2",
+					MetricsSchema:   common.MetricsSchemaTelegrafPrometheusV2.String(),
 					PayloadMaxLines: 72,
 					PayloadMaxBytes: 27,
+				},
+				LogsConfig: LogsConfig{
+					LogsEndpoint: usLogsEndpoint,
+					AppToken:     logsAppToken,
 				},
 
 				BackOffConfig: configretry.BackOffConfig{
@@ -108,6 +115,9 @@ func TestConfigValidation(t *testing.T) {
 				MetricsConfig: MetricsConfig{
 					AppToken: metricsAppToken,
 				},
+				LogsConfig: LogsConfig{
+					AppToken: logsAppToken,
+				},
 			},
 			expectError: false,
 		},
@@ -117,6 +127,9 @@ func TestConfigValidation(t *testing.T) {
 				Region: euRegion,
 				MetricsConfig: MetricsConfig{
 					AppToken: metricsAppToken,
+				},
+				LogsConfig: LogsConfig{
+					AppToken: logsAppToken,
 				},
 			},
 			expectError: false,
@@ -128,6 +141,9 @@ func TestConfigValidation(t *testing.T) {
 				MetricsConfig: MetricsConfig{
 					AppToken: metricsAppToken,
 				},
+				LogsConfig: LogsConfig{
+					AppToken: logsAppToken,
+				},
 			},
 			expectError: true,
 		},
@@ -136,6 +152,16 @@ func TestConfigValidation(t *testing.T) {
 			config: &Config{
 				Region: usRegion,
 				MetricsConfig: MetricsConfig{
+					AppToken: "short-token",
+				},
+			},
+			expectError: true,
+		},
+		{
+			name: "Invalid logs AppToken",
+			config: &Config{
+				Region: usRegion,
+				LogsConfig: LogsConfig{
 					AppToken: "short-token",
 				},
 			},

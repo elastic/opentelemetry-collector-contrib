@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cenkalti/backoff/v4"
+	"github.com/cenkalti/backoff/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
@@ -44,12 +44,11 @@ func TestLoadConfig(t *testing.T) {
 				LogStreamName:      "testing",
 				Endpoint:           "",
 				AWSSessionSettings: awsutil.CreateDefaultSessionConfig(),
-				QueueSettings: exporterhelper.QueueBatchConfig{
-					Enabled:      true,
-					NumConsumers: 1,
-					QueueSize:    exporterhelper.NewDefaultQueueConfig().QueueSize,
-					Sizer:        exporterhelper.RequestSizerTypeRequests,
-				},
+				QueueSettings: func() exporterhelper.QueueBatchConfig {
+					queue := exporterhelper.NewDefaultQueueConfig()
+					queue.NumConsumers = 1
+					return queue
+				}(),
 			},
 		},
 		{
@@ -66,12 +65,12 @@ func TestLoadConfig(t *testing.T) {
 				AWSSessionSettings: awsutil.CreateDefaultSessionConfig(),
 				LogGroupName:       "test-2",
 				LogStreamName:      "testing",
-				QueueSettings: exporterhelper.QueueBatchConfig{
-					Enabled:      true,
-					NumConsumers: 1,
-					QueueSize:    2,
-					Sizer:        exporterhelper.RequestSizerTypeRequests,
-				},
+				QueueSettings: func() exporterhelper.QueueBatchConfig {
+					queue := exporterhelper.NewDefaultQueueConfig()
+					queue.NumConsumers = 1
+					queue.QueueSize = 2
+					return queue
+				}(),
 			},
 		},
 		{
@@ -157,20 +156,20 @@ func TestValidateTags(t *testing.T) {
 	tooLongValue := strings.Repeat("a", 257)
 
 	// Create a map with no items and then one with too many items for testing
-	emptyMap := make(map[string]*string)
-	bigMap := make(map[string]*string)
-	for i := 0; i < 51; i++ {
-		bigMap[strconv.Itoa(i)] = &basicValue
+	emptyMap := make(map[string]string)
+	bigMap := make(map[string]string)
+	for i := range 51 {
+		bigMap[strconv.Itoa(i)] = basicValue
 	}
 
 	tests := []struct {
 		id           component.ID
-		tags         map[string]*string
+		tags         map[string]string
 		errorMessage string
 	}{
 		{
 			id:   component.NewIDWithName(metadata.Type, "validate-correct"),
-			tags: map[string]*string{"basicKey": &basicValue},
+			tags: map[string]string{"basicKey": basicValue},
 		},
 		{
 			id:           component.NewIDWithName(metadata.Type, "too-little-tags"),
@@ -184,32 +183,32 @@ func TestValidateTags(t *testing.T) {
 		},
 		{
 			id:           component.NewIDWithName(metadata.Type, "wrong-key-regex"),
-			tags:         map[string]*string{"***": &basicValue},
+			tags:         map[string]string{"***": basicValue},
 			errorMessage: "key - *** does not follow the regex pattern" + `^([\p{L}\p{Z}\p{N}_.:/=+\-@]+)$`,
 		},
 		{
 			id:           component.NewIDWithName(metadata.Type, "wrong-value-regex"),
-			tags:         map[string]*string{"basicKey": &wrongRegexValue},
+			tags:         map[string]string{"basicKey": wrongRegexValue},
 			errorMessage: "value - " + wrongRegexValue + " does not follow the regex pattern" + `^([\p{L}\p{Z}\p{N}_.:/=+\-@]*)$`,
 		},
 		{
 			id:           component.NewIDWithName(metadata.Type, "key-too-short"),
-			tags:         map[string]*string{"": &basicValue},
+			tags:         map[string]string{"": basicValue},
 			errorMessage: "key -  has an invalid length. Please use keys with a length of 1 to 128 characters",
 		},
 		{
 			id:           component.NewIDWithName(metadata.Type, "key-too-long"),
-			tags:         map[string]*string{strings.Repeat("a", 129): &basicValue},
+			tags:         map[string]string{strings.Repeat("a", 129): basicValue},
 			errorMessage: "key - " + strings.Repeat("a", 129) + " has an invalid length. Please use keys with a length of 1 to 128 characters",
 		},
 		{
 			id:           component.NewIDWithName(metadata.Type, "value-too-short"),
-			tags:         map[string]*string{"basicKey": &emptyValue},
+			tags:         map[string]string{"basicKey": emptyValue},
 			errorMessage: "value - " + emptyValue + " has an invalid length. Please use values with a length of 1 to 256 characters",
 		},
 		{
 			id:           component.NewIDWithName(metadata.Type, "value-too-long"),
-			tags:         map[string]*string{"basicKey": &tooLongValue},
+			tags:         map[string]string{"basicKey": tooLongValue},
 			errorMessage: "value - " + tooLongValue + " has an invalid length. Please use values with a length of 1 to 256 characters",
 		},
 	}

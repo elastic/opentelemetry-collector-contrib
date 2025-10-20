@@ -5,6 +5,7 @@ package logs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -16,7 +17,7 @@ import (
 	"go.opentelemetry.io/otel/log"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/sdk/resource"
-	semconv "go.opentelemetry.io/otel/semconv/v1.25.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 	"go.uber.org/zap"
 	"golang.org/x/time/rate"
 
@@ -32,7 +33,7 @@ func Start(cfg *Config) error {
 
 	logger.Info("starting the logs generator with configuration", zap.Any("config", cfg))
 
-	if err = run(cfg, exporterFactory(cfg, logger), logger); err != nil {
+	if err := run(cfg, exporterFactory(cfg, logger), logger); err != nil {
 		return err
 	}
 
@@ -45,7 +46,7 @@ func run(c *Config, expF exporterFunc, logger *zap.Logger) error {
 		return err
 	}
 
-	if c.TotalDuration > 0 {
+	if c.TotalDuration.Duration() > 0 || c.TotalDuration.IsInf() {
 		c.NumLogs = 0
 	}
 
@@ -83,6 +84,8 @@ func run(c *Config, expF exporterFunc, logger *zap.Logger) error {
 			index:          i,
 			traceID:        c.TraceID,
 			spanID:         c.SpanID,
+			loadSize:       c.LoadSize,
+			allowFailures:  c.AllowExportFailures,
 		}
 		exp, err := expF()
 		if err != nil {
@@ -97,8 +100,8 @@ func run(c *Config, expF exporterFunc, logger *zap.Logger) error {
 		}()
 		go w.simulateLogs(res, exp, c.GetTelemetryAttributes())
 	}
-	if c.TotalDuration > 0 {
-		time.Sleep(c.TotalDuration)
+	if c.TotalDuration.Duration() > 0 && !c.TotalDuration.IsInf() {
+		time.Sleep(c.TotalDuration.Duration())
 		running.Store(false)
 	}
 	wg.Wait()
@@ -147,7 +150,7 @@ func createExporter(cfg *Config, logger *zap.Logger) (sdklog.Exporter, error) {
 func parseSeverity(severityText string, severityNumber int32) (string, log.Severity, error) {
 	sn := log.Severity(severityNumber)
 	if sn < log.SeverityTrace1 || sn > log.SeverityFatal4 {
-		return "", log.SeverityUndefined, fmt.Errorf("severity-number is out of range, the valid range is [1,24]")
+		return "", log.SeverityUndefined, errors.New("severity-number is out of range, the valid range is [1,24]")
 	}
 
 	// severity number should match well-known severityText

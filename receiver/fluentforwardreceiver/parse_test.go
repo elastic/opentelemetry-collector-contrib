@@ -25,8 +25,8 @@ func parseHexDump(name string) []byte {
 	}
 
 	var hexStr string
-	for _, line := range strings.Split(string(dump), "\n") {
-		if len(line) == 0 {
+	for line := range strings.SplitSeq(string(dump), "\n") {
+		if line == "" {
 			continue
 		}
 		line = strings.Split(line, "|")[0]

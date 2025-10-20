@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cenkalti/backoff/v4"
+	"github.com/cenkalti/backoff/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
@@ -53,12 +53,13 @@ func TestLoadConfig(t *testing.T) {
 			RandomizationFactor: backoff.DefaultRandomizationFactor,
 			Multiplier:          backoff.DefaultMultiplier,
 		},
-		QueueSettings: exporterhelper.QueueBatchConfig{
-			Enabled:      true,
-			NumConsumers: 10,
-			QueueSize:    1000,
-			Sizer:        exporterhelper.RequestSizerTypeRequests,
-		},
+		QueueSettings: func() exporterhelper.QueueBatchConfig {
+			queue := exporterhelper.NewDefaultQueueConfig()
+			queue.Enabled = true
+			queue.NumConsumers = 10
+			queue.QueueSize = 1000
+			return queue
+		}(),
 		Table: Table{
 			Logs:    "otel_logs",
 			Traces:  "otel_traces",

@@ -5,7 +5,9 @@ package entry // import "github.com/open-telemetry/opentelemetry-collector-contr
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"maps"
 )
 
 // AttributeField is the path to an entry attribute
@@ -96,7 +98,7 @@ func (f AttributeField) Set(entry *Entry, value any) error {
 	}
 
 	if f.isRoot() {
-		return fmt.Errorf("cannot set attributes root")
+		return errors.New("cannot set attributes root")
 	}
 
 	currentMap := entry.Attributes
@@ -119,9 +121,7 @@ func (f AttributeField) Merge(entry *Entry, mapValues map[string]any) {
 		currentMap = getNestedMap(currentMap, key)
 	}
 
-	for key, value := range mapValues {
-		currentMap[key] = value
-	}
+	maps.Copy(currentMap, mapValues)
 }
 
 // Delete removes a value from an entry's attributes using the field.

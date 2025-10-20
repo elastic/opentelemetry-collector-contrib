@@ -9,6 +9,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/stretchr/testify/require"
+
 	"go.opentelemetry.io/collector/confmap/confmaptest"
 )
 
@@ -31,6 +32,7 @@ func TestResourceAttributesConfig(t *testing.T) {
 				K8sClusterUID:             ResourceAttributeConfig{Enabled: true},
 				K8sContainerName:          ResourceAttributeConfig{Enabled: true},
 				K8sCronjobName:            ResourceAttributeConfig{Enabled: true},
+				K8sCronjobUID:             ResourceAttributeConfig{Enabled: true},
 				K8sDaemonsetName:          ResourceAttributeConfig{Enabled: true},
 				K8sDaemonsetUID:           ResourceAttributeConfig{Enabled: true},
 				K8sDeploymentName:         ResourceAttributeConfig{Enabled: true},
@@ -49,6 +51,10 @@ func TestResourceAttributesConfig(t *testing.T) {
 				K8sReplicasetUID:          ResourceAttributeConfig{Enabled: true},
 				K8sStatefulsetName:        ResourceAttributeConfig{Enabled: true},
 				K8sStatefulsetUID:         ResourceAttributeConfig{Enabled: true},
+				ServiceInstanceID:         ResourceAttributeConfig{Enabled: true},
+				ServiceName:               ResourceAttributeConfig{Enabled: true},
+				ServiceNamespace:          ResourceAttributeConfig{Enabled: true},
+				ServiceVersion:            ResourceAttributeConfig{Enabled: true},
 			},
 		},
 		{
@@ -61,6 +67,7 @@ func TestResourceAttributesConfig(t *testing.T) {
 				K8sClusterUID:             ResourceAttributeConfig{Enabled: false},
 				K8sContainerName:          ResourceAttributeConfig{Enabled: false},
 				K8sCronjobName:            ResourceAttributeConfig{Enabled: false},
+				K8sCronjobUID:             ResourceAttributeConfig{Enabled: false},
 				K8sDaemonsetName:          ResourceAttributeConfig{Enabled: false},
 				K8sDaemonsetUID:           ResourceAttributeConfig{Enabled: false},
 				K8sDeploymentName:         ResourceAttributeConfig{Enabled: false},
@@ -79,6 +86,10 @@ func TestResourceAttributesConfig(t *testing.T) {
 				K8sReplicasetUID:          ResourceAttributeConfig{Enabled: false},
 				K8sStatefulsetName:        ResourceAttributeConfig{Enabled: false},
 				K8sStatefulsetUID:         ResourceAttributeConfig{Enabled: false},
+				ServiceInstanceID:         ResourceAttributeConfig{Enabled: false},
+				ServiceName:               ResourceAttributeConfig{Enabled: false},
+				ServiceNamespace:          ResourceAttributeConfig{Enabled: false},
+				ServiceVersion:            ResourceAttributeConfig{Enabled: false},
 			},
 		},
 	}

@@ -6,12 +6,13 @@ package ec2 // import "github.com/open-telemetry/opentelemetry-collector-contrib
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
 	"sync"
 
-	"github.com/DataDog/opentelemetry-mapping-go/pkg/otlp/attributes/source"
+	"github.com/DataDog/datadog-agent/pkg/opentelemetry-mapping-go/otlp/attributes/source"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
@@ -49,7 +50,7 @@ func GetHostInfo(ctx context.Context, logger *zap.Logger) (hostInfo *HostInfo) {
 	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		logger.Warn("Failed to build AWS config", zap.Error(err))
-		return
+		return hostInfo
 	}
 
 	client := imds.NewFromConfig(cfg)
@@ -60,7 +61,7 @@ func GetHostInfo(ctx context.Context, logger *zap.Logger) (hostInfo *HostInfo) {
 	})
 	if err != nil {
 		logger.Debug("EC2 Metadata service is not available", zap.Error(err))
-		return
+		return hostInfo
 	}
 
 	idDoc, err := client.GetInstanceIdentityDocument(ctx, &imds.GetInstanceIdentityDocumentInput{})
@@ -83,7 +84,7 @@ func GetHostInfo(ctx context.Context, logger *zap.Logger) (hostInfo *HostInfo) {
 		}
 	}
 
-	return
+	return hostInfo
 }
 
 func (hi *HostInfo) GetHostname(_ *zap.Logger) string {
@@ -125,7 +126,7 @@ func (p *Provider) fillHostInfo(ctx context.Context) {
 func (p *Provider) Source(ctx context.Context) (source.Source, error) {
 	p.fillHostInfo(ctx)
 	if p.hostInfo.InstanceID == "" {
-		return source.Source{}, fmt.Errorf("instance ID is unavailable")
+		return source.Source{}, errors.New("instance ID is unavailable")
 	}
 
 	return source.Source{Kind: source.HostnameKind, Identifier: p.hostInfo.InstanceID}, nil

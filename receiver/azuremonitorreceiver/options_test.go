@@ -10,10 +10,12 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/arm"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/cloud"
+	"github.com/Azure/azure-sdk-for-go/sdk/monitor/query/azmetrics"
+	azmetricsfake "github.com/Azure/azure-sdk-for-go/sdk/monitor/query/azmetrics/fake"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/monitor/armmonitor"
 	armmonitorfake "github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/monitor/armmonitor/fake"
-	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armresources/v2"
-	armresourcesfake "github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armresources/v2/fake"
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armresources/v3"
+	armresourcesfake "github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armresources/v3/fake"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armsubscriptions"
 	armsubscriptionsfake "github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armsubscriptions/fake"
 )
@@ -81,6 +83,7 @@ type mockClientOptionsResolver struct {
 	armResourcesClientOptions     map[string]*arm.ClientOptions
 	armSubscriptionsClientOptions *arm.ClientOptions
 	armMonitorClientOptions       *arm.ClientOptions
+	azMetricsClientOptions        *azmetrics.ClientOptions
 }
 
 // newMockClientOptionsResolver is an options resolver that will generate mocking client options for each Azure API.
@@ -98,6 +101,7 @@ func newMockClientOptionsResolver(
 	resources map[string][]armresources.ClientListResponse,
 	metricsDefinitions map[string][]armmonitor.MetricDefinitionsClientListResponse,
 	metrics map[string]map[string]armmonitor.MetricsClientListResponse,
+	metricsQueryResponses []queryResourcesResponseMock,
 ) ClientOptionsResolver {
 	// Init resources client options from resources mock data
 	armResourcesClientOptions := make(map[string]*arm.ClientOptions)
@@ -107,6 +111,7 @@ func newMockClientOptionsResolver(
 		}
 		armResourcesClientOptions[subID] = &arm.ClientOptions{
 			ClientOptions: azcore.ClientOptions{
+				Cloud:     cloud.AzurePublic, // Ensure Cloud client options is set. This is important to prevent race condition in the client constructor.
 				Transport: armresourcesfake.NewServerTransport(&resourceServer),
 			},
 		}
@@ -119,6 +124,7 @@ func newMockClientOptionsResolver(
 	}
 	armSubscriptionsClientOptions := &arm.ClientOptions{
 		ClientOptions: azcore.ClientOptions{
+			Cloud:     cloud.AzurePublic, // Ensure Cloud client options is set. This is important to prevent race condition in the client constructor.
 			Transport: armsubscriptionsfake.NewServerTransport(&subscriptionsServer),
 		},
 	}
@@ -134,7 +140,19 @@ func newMockClientOptionsResolver(
 	}
 	armMonitorClientOptions := &arm.ClientOptions{
 		ClientOptions: azcore.ClientOptions{
+			Cloud:     cloud.AzurePublic, // Ensure Cloud client options is set. This is important to prevent race condition in the client constructor.
 			Transport: armmonitorfake.NewServerFactoryTransport(&armMonitorServerFactory),
+		},
+	}
+
+	// Init az metrics client options from metrics query responses mock data
+	azMetricsServer := azmetricsfake.Server{
+		QueryResources: newMockMetricsQueryResponse(metricsQueryResponses),
+	}
+	azMetricsClientOptions := &azmetrics.ClientOptions{
+		ClientOptions: azcore.ClientOptions{
+			Cloud:     cloud.AzurePublic, // Ensure Cloud client options is set. This is important to prevent race condition in the client constructor.
+			Transport: azmetricsfake.NewServerTransport(&azMetricsServer),
 		},
 	}
 
@@ -142,6 +160,7 @@ func newMockClientOptionsResolver(
 		armResourcesClientOptions:     armResourcesClientOptions,
 		armSubscriptionsClientOptions: armSubscriptionsClientOptions,
 		armMonitorClientOptions:       armMonitorClientOptions,
+		azMetricsClientOptions:        azMetricsClientOptions,
 	}
 }
 
@@ -155,4 +174,8 @@ func (m mockClientOptionsResolver) GetArmSubscriptionsClientOptions() *arm.Clien
 
 func (m mockClientOptionsResolver) GetArmMonitorClientOptions() *arm.ClientOptions {
 	return m.armMonitorClientOptions
+}
+
+func (m mockClientOptionsResolver) GetAzMetricsClientOptions() *azmetrics.ClientOptions {
+	return m.azMetricsClientOptions
 }

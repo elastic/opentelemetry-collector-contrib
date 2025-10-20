@@ -6,11 +6,12 @@ package provider // import "github.com/open-telemetry/opentelemetry-collector-co
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 
-	"github.com/DataDog/opentelemetry-mapping-go/pkg/otlp/attributes/source"
+	"github.com/DataDog/datadog-agent/pkg/opentelemetry-mapping-go/otlp/attributes/source"
 	"go.uber.org/zap"
 )
 
@@ -73,7 +74,7 @@ func (p *chainProvider) Source(ctx context.Context) (source.Source, error) {
 		}
 	}
 
-	return source.Source{}, fmt.Errorf("no source provider was available")
+	return source.Source{}, errors.New("no source provider was available")
 }
 
 // Chain providers into a single provider that returns the first available hostname.
@@ -95,7 +96,7 @@ type configProvider struct {
 
 func (p *configProvider) Source(context.Context) (source.Source, error) {
 	if p.hostname == "" {
-		return source.Source{}, fmt.Errorf("empty configuration hostname")
+		return source.Source{}, errors.New("empty configuration hostname")
 	}
 	return source.Source{Kind: source.HostnameKind, Identifier: p.hostname}, nil
 }

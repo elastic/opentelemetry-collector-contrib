@@ -4,7 +4,6 @@
 package ottlmetric
 
 import (
-	"context"
 	"slices"
 	"testing"
 
@@ -24,6 +23,9 @@ func Test_newPathGetSetter(t *testing.T) {
 
 	newCache := pcommon.NewMap()
 	newCache.PutStr("temp", "value")
+
+	newMetadata := pcommon.NewMap()
+	newMetadata.PutStr("new_k", "new_v")
 
 	newMetric := pmetric.NewMetric()
 	newMetric.SetName("new name")
@@ -116,6 +118,33 @@ func Test_newPathGetSetter(t *testing.T) {
 			},
 		},
 		{
+			name: "metadata",
+			path: &pathtest.Path[TransformContext]{
+				N: "metadata",
+			},
+			orig:   pcommon.NewMap(),
+			newVal: newMetadata,
+			modified: func(metric pmetric.Metric, _ pcommon.Map) {
+				newMetadata.CopyTo(metric.Metadata())
+			},
+		},
+		{
+			name: "metadata access",
+			path: &pathtest.Path[TransformContext]{
+				N: "metadata",
+				KeySlice: []ottl.Key[TransformContext]{
+					&pathtest.Key[TransformContext]{
+						S: ottltest.Strp("temp"),
+					},
+				},
+			},
+			orig:   nil,
+			newVal: "new value",
+			modified: func(metric pmetric.Metric, _ pcommon.Map) {
+				metric.Metadata().PutStr("temp", "new value")
+			},
+		},
+		{
 			name: "cache",
 			path: &pathtest.Path[TransformContext]{
 				N: "cache",
@@ -168,11 +197,11 @@ func Test_newPathGetSetter(t *testing.T) {
 
 			ctx := NewTransformContext(metric, pmetric.NewMetricSlice(), pcommon.NewInstrumentationScope(), pcommon.NewResource(), pmetric.NewScopeMetrics(), pmetric.NewResourceMetrics())
 
-			got, err := accessor.Get(context.Background(), ctx)
+			got, err := accessor.Get(t.Context(), ctx)
 			assert.NoError(t, err)
 			assert.Equal(t, tt.orig, got)
 
-			err = accessor.Set(context.Background(), ctx, tt.newVal)
+			err = accessor.Set(t.Context(), ctx, tt.newVal)
 			assert.NoError(t, err)
 
 			exMetric := createTelemetry()
@@ -230,6 +259,16 @@ func Test_newPathGetSetter_higherContextPath(t *testing.T) {
 			path:     &pathtest.Path[TransformContext]{C: "instrumentation_scope", N: "name"},
 			expected: instrumentationScope.Name(),
 		},
+		{
+			name:     "scope",
+			path:     &pathtest.Path[TransformContext]{N: "scope", NextPath: &pathtest.Path[TransformContext]{N: "name"}},
+			expected: instrumentationScope.Name(),
+		},
+		{
+			name:     "scope with context",
+			path:     &pathtest.Path[TransformContext]{C: "scope", N: "name"},
+			expected: instrumentationScope.Name(),
+		},
 	}
 
 	for _, tt := range tests {
@@ -237,28 +276,11 @@ func Test_newPathGetSetter_higherContextPath(t *testing.T) {
 			accessor, err := pathExpressionParser(getCache)(tt.path)
 			require.NoError(t, err)
 
-			got, err := accessor.Get(context.Background(), ctx)
+			got, err := accessor.Get(t.Context(), ctx)
 			assert.NoError(t, err)
 			assert.Equal(t, tt.expected, got)
 		})
 	}
-}
-
-func Test_newPathGetSetter_WithCache(t *testing.T) {
-	cacheValue := pcommon.NewMap()
-	cacheValue.PutStr("test", "pass")
-
-	tCtx := NewTransformContext(
-		pmetric.NewMetric(),
-		pmetric.NewMetricSlice(),
-		pcommon.NewInstrumentationScope(),
-		pcommon.NewResource(),
-		pmetric.NewScopeMetrics(),
-		pmetric.NewResourceMetrics(),
-		WithCache(&cacheValue),
-	)
-
-	assert.Equal(t, cacheValue, getCache(tCtx))
 }
 
 func createTelemetry() pmetric.Metric {

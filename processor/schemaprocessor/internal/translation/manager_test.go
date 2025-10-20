@@ -6,6 +6,7 @@ package translation
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -42,11 +43,11 @@ func TestRequestTranslation(t *testing.T) {
 	)
 	require.NoError(t, err, "Must not error when created manager")
 
-	tr, err := m.RequestTranslation(context.Background(), "/not/a/valid/schema/URL")
+	tr, err := m.RequestTranslation(t.Context(), "/not/a/valid/schema/URL")
 	assert.Error(t, err, "Must error when requesting an invalid schema URL")
 	assert.Nil(t, tr, "Must not return a translation")
 
-	tn, err := m.RequestTranslation(context.Background(), schemaURL)
+	tn, err := m.RequestTranslation(t.Context(), schemaURL)
 	require.NoError(t, err, "Must not error when requesting a valid schema URL")
 	require.NotNil(t, tn, "Must return a translation")
 
@@ -67,8 +68,8 @@ func TestRequestTranslation(t *testing.T) {
 
 type errorProvider struct{}
 
-func (p *errorProvider) Retrieve(_ context.Context, _ string) (string, error) {
-	return "", fmt.Errorf("error")
+func (*errorProvider) Retrieve(_ context.Context, _ string) (string, error) {
+	return "", errors.New("error")
 }
 
 func TestManagerError(t *testing.T) {
@@ -81,7 +82,7 @@ func TestManagerError(t *testing.T) {
 	)
 	require.NoError(t, err, "Must not error when created manager")
 
-	tr, err := m.RequestTranslation(context.Background(), "http://localhost/1.1.0")
+	tr, err := m.RequestTranslation(t.Context(), "http://localhost/1.1.0")
 	assert.Error(t, err, "Must error when provider errors")
 	assert.Nil(t, tr, "Must not return a translation")
 }

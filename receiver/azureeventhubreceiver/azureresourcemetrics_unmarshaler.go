@@ -9,13 +9,12 @@ import (
 	"strings"
 	"time"
 
-	eventhub "github.com/Azure/azure-event-hubs-go/v3"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/relvacode/iso8601"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pmetric"
-	conventions "go.opentelemetry.io/collector/semconv/v1.27.0"
+	conventions "go.opentelemetry.io/otel/semconv/v1.27.0"
 	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/azureeventhubreceiver/internal/metadata"
@@ -62,11 +61,11 @@ func newAzureResourceMetricsUnmarshaler(buildInfo component.BuildInfo, logger *z
 // an OpenTelemetry pmetric.Metrics object. The data in the Azure
 // metric record appears as fields and attributes in the
 // OpenTelemetry representation;
-func (r azureResourceMetricsUnmarshaler) UnmarshalMetrics(event *eventhub.Event) (pmetric.Metrics, error) {
+func (r azureResourceMetricsUnmarshaler) UnmarshalMetrics(event *azureEvent) (pmetric.Metrics, error) {
 	md := pmetric.NewMetrics()
 
 	var azureMetrics azureMetricRecords
-	decoder := jsoniter.NewDecoder(bytes.NewReader(event.Data))
+	decoder := jsoniter.NewDecoder(bytes.NewReader(event.Data()))
 	err := decoder.Decode(&azureMetrics)
 	if err != nil {
 		return md, err
@@ -74,10 +73,10 @@ func (r azureResourceMetricsUnmarshaler) UnmarshalMetrics(event *eventhub.Event)
 
 	resourceMetrics := md.ResourceMetrics().AppendEmpty()
 	resource := resourceMetrics.Resource()
-	resource.Attributes().PutStr(conventions.AttributeTelemetrySDKName, metadata.ScopeName)
-	resource.Attributes().PutStr(conventions.AttributeTelemetrySDKLanguage, conventions.AttributeTelemetrySDKLanguageGo)
-	resource.Attributes().PutStr(conventions.AttributeTelemetrySDKVersion, r.buildInfo.Version)
-	resource.Attributes().PutStr(conventions.AttributeCloudProvider, conventions.AttributeCloudProviderAzure)
+	resource.Attributes().PutStr(string(conventions.TelemetrySDKNameKey), metadata.ScopeName)
+	resource.Attributes().PutStr(string(conventions.TelemetrySDKLanguageKey), conventions.TelemetrySDKLanguageGo.Value.AsString())
+	resource.Attributes().PutStr(string(conventions.TelemetrySDKVersionKey), r.buildInfo.Version)
+	resource.Attributes().PutStr(string(conventions.CloudProviderKey), conventions.CloudProviderAzure.Value.AsString())
 
 	scopeMetrics := resourceMetrics.ScopeMetrics().AppendEmpty()
 

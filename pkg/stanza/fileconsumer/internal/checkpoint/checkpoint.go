@@ -9,8 +9,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 
 	"go.opentelemetry.io/collector/extension/xextension/storage"
+	"go.uber.org/multierr"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/fileconsumer/internal/reader"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/operator"
@@ -32,19 +34,19 @@ func SaveKey(ctx context.Context, persister operator.Persister, rmds []*reader.M
 		return fmt.Errorf("encode num files: %w", err)
 	}
 
-	var errs []error
+	var errs error
 	// Encode each known file
 	for _, rmd := range rmds {
 		if err := enc.Encode(rmd); err != nil {
-			errs = append(errs, fmt.Errorf("encode metadata: %w", err))
+			errs = multierr.Append(errs, fmt.Errorf("encode metadata: %w", err))
 		}
 	}
 	ops = append(ops, storage.SetOperation(key, buf.Bytes()))
 	if err := persister.Batch(ctx, ops...); err != nil {
-		errs = append(errs, fmt.Errorf("persist known files: %w", err))
+		errs = multierr.Append(errs, fmt.Errorf("persist known files: %w", err))
 	}
 
-	return errors.Join(errs...)
+	return errs
 }
 
 // Load loads the most recent set of files to the database
@@ -71,11 +73,12 @@ func LoadKey(ctx context.Context, persister operator.Persister, key string) ([]*
 	}
 
 	// Decode each of the known files
-	var errs []error
+	var errs error
 	rmds := make([]*reader.Metadata, 0, knownFileCount)
 	for i := 0; i < knownFileCount; i++ {
 		rmd := new(reader.Metadata)
-		if err = dec.Decode(rmd); err != nil {
+		err = dec.Decode(rmd)
+		if err != nil {
 			return nil, err
 		}
 		if rmd.FileAttributes == nil {
@@ -87,12 +90,10 @@ func LoadKey(ctx context.Context, persister operator.Persister, key string) ([]*
 		if ha, ok := rmd.FileAttributes["HeaderAttributes"]; ok {
 			switch hat := ha.(type) {
 			case map[string]any:
-				for k, v := range hat {
-					rmd.FileAttributes[k] = v
-				}
+				maps.Copy(rmd.FileAttributes, hat)
 				delete(rmd.FileAttributes, "HeaderAttributes")
 			default:
-				errs = append(errs, errors.New("migrate header attributes: unexpected format"))
+				errs = multierr.Append(errs, errors.New("migrate header attributes: unexpected format"))
 			}
 		}
 
@@ -100,5 +101,5 @@ func LoadKey(ctx context.Context, persister operator.Persister, key string) ([]*
 		rmds = append(rmds, rmd)
 	}
 
-	return rmds, errors.Join(errs...)
+	return rmds, errs
 }

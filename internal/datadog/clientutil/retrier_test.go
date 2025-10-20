@@ -6,7 +6,6 @@ package clientutil // import "github.com/open-telemetry/opentelemetry-collector-
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -22,7 +21,7 @@ import (
 func TestDoWithRetries(t *testing.T) {
 	scrubber := scrub.NewScrubber()
 	retrier := NewRetrier(zap.NewNop(), configretry.NewDefaultBackOffConfig(), scrubber)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	retryNum, err := retrier.DoWithRetries(ctx, func(context.Context) error { return nil })
 	require.NoError(t, err)
@@ -45,11 +44,11 @@ func TestDoWithRetries(t *testing.T) {
 func TestNoRetriesOnPermanentError(t *testing.T) {
 	scrubber := scrub.NewScrubber()
 	retrier := NewRetrier(zap.NewNop(), configretry.NewDefaultBackOffConfig(), scrubber)
-	ctx := context.Background()
+	ctx := t.Context()
 	respNonRetriable := http.Response{StatusCode: http.StatusNotFound}
 
 	retryNum, err := retrier.DoWithRetries(ctx, func(context.Context) error {
-		return WrapError(fmt.Errorf("test"), &respNonRetriable)
+		return WrapError(errors.New("test"), &respNonRetriable)
 	})
 	require.Error(t, err)
 	assert.Equal(t, int64(0), retryNum)

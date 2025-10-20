@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/collector/pdata/plog"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottllog"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor/internal/common"
 )
 
@@ -28,6 +29,8 @@ var (
 
 	traceID = [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
 	spanID  = [8]byte{1, 2, 3, 4, 5, 6, 7, 8}
+
+	DefaultLogFunctions = LogFunctions()
 )
 
 func Test_ProcessLogs_ResourceContext(t *testing.T) {
@@ -57,10 +60,10 @@ func Test_ProcessLogs_ResourceContext(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.statement, func(t *testing.T) {
 			td := constructLogs()
-			processor, err := NewProcessor([]common.ContextStatements{{Context: "resource", Statements: []string{tt.statement}}}, ottl.IgnoreError, false, componenttest.NewNopTelemetrySettings())
+			processor, err := NewProcessor([]common.ContextStatements{{Context: "resource", Statements: []string{tt.statement}}}, ottl.IgnoreError, false, componenttest.NewNopTelemetrySettings(), DefaultLogFunctions)
 			assert.NoError(t, err)
 
-			_, err = processor.ProcessLogs(context.Background(), td)
+			_, err = processor.ProcessLogs(t.Context(), td)
 			assert.NoError(t, err)
 
 			exTd := constructLogs()
@@ -98,10 +101,10 @@ func Test_ProcessLogs_InferredResourceContext(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.statement, func(t *testing.T) {
 			td := constructLogs()
-			processor, err := NewProcessor([]common.ContextStatements{{Context: "", Statements: []string{tt.statement}}}, ottl.IgnoreError, false, componenttest.NewNopTelemetrySettings())
+			processor, err := NewProcessor([]common.ContextStatements{{Context: "", Statements: []string{tt.statement}}}, ottl.IgnoreError, false, componenttest.NewNopTelemetrySettings(), DefaultLogFunctions)
 			assert.NoError(t, err)
 
-			_, err = processor.ProcessLogs(context.Background(), td)
+			_, err = processor.ProcessLogs(t.Context(), td)
 			assert.NoError(t, err)
 
 			exTd := constructLogs()
@@ -139,10 +142,10 @@ func Test_ProcessLogs_ScopeContext(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.statement, func(t *testing.T) {
 			td := constructLogs()
-			processor, err := NewProcessor([]common.ContextStatements{{Context: "scope", Statements: []string{tt.statement}}}, ottl.IgnoreError, false, componenttest.NewNopTelemetrySettings())
+			processor, err := NewProcessor([]common.ContextStatements{{Context: "scope", Statements: []string{tt.statement}}}, ottl.IgnoreError, false, componenttest.NewNopTelemetrySettings(), DefaultLogFunctions)
 			assert.NoError(t, err)
 
-			_, err = processor.ProcessLogs(context.Background(), td)
+			_, err = processor.ProcessLogs(t.Context(), td)
 			assert.NoError(t, err)
 
 			exTd := constructLogs()
@@ -180,10 +183,10 @@ func Test_ProcessLogs_InferredScopeContext(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.statement, func(t *testing.T) {
 			td := constructLogs()
-			processor, err := NewProcessor([]common.ContextStatements{{Context: "", Statements: []string{tt.statement}}}, ottl.IgnoreError, false, componenttest.NewNopTelemetrySettings())
+			processor, err := NewProcessor([]common.ContextStatements{{Context: "", Statements: []string{tt.statement}}}, ottl.IgnoreError, false, componenttest.NewNopTelemetrySettings(), DefaultLogFunctions)
 			assert.NoError(t, err)
 
-			_, err = processor.ProcessLogs(context.Background(), td)
+			_, err = processor.ProcessLogs(t.Context(), td)
 			assert.NoError(t, err)
 
 			exTd := constructLogs()
@@ -434,10 +437,10 @@ func Test_ProcessLogs_LogContext(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.statement, func(t *testing.T) {
 			td := constructLogs()
-			processor, err := NewProcessor([]common.ContextStatements{{Context: "log", Statements: []string{tt.statement}}}, ottl.IgnoreError, false, componenttest.NewNopTelemetrySettings())
+			processor, err := NewProcessor([]common.ContextStatements{{Context: "log", Statements: []string{tt.statement}}}, ottl.IgnoreError, false, componenttest.NewNopTelemetrySettings(), DefaultLogFunctions)
 			assert.NoError(t, err)
 
-			_, err = processor.ProcessLogs(context.Background(), td)
+			_, err = processor.ProcessLogs(t.Context(), td)
 			assert.NoError(t, err)
 
 			exTd := constructLogs()
@@ -688,10 +691,10 @@ func Test_ProcessLogs_InferredLogContext(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.statement, func(t *testing.T) {
 			td := constructLogs()
-			processor, err := NewProcessor([]common.ContextStatements{{Context: "", Statements: []string{tt.statement}}}, ottl.IgnoreError, false, componenttest.NewNopTelemetrySettings())
+			processor, err := NewProcessor([]common.ContextStatements{{Context: "", Statements: []string{tt.statement}}}, ottl.IgnoreError, false, componenttest.NewNopTelemetrySettings(), DefaultLogFunctions)
 			assert.NoError(t, err)
 
-			_, err = processor.ProcessLogs(context.Background(), td)
+			_, err = processor.ProcessLogs(t.Context(), td)
 			assert.NoError(t, err)
 
 			exTd := constructLogs()
@@ -805,10 +808,10 @@ func Test_ProcessLogs_MixContext(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			td := constructLogs()
-			processor, err := NewProcessor(tt.contextStatements, ottl.IgnoreError, false, componenttest.NewNopTelemetrySettings())
+			processor, err := NewProcessor(tt.contextStatements, ottl.IgnoreError, false, componenttest.NewNopTelemetrySettings(), DefaultLogFunctions)
 			assert.NoError(t, err)
 
-			_, err = processor.ProcessLogs(context.Background(), td)
+			_, err = processor.ProcessLogs(t.Context(), td)
 			assert.NoError(t, err)
 
 			exTd := constructLogs()
@@ -895,10 +898,10 @@ func Test_ProcessLogs_InferredMixContext(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			td := constructLogs()
-			processor, err := NewProcessor(tt.contextStatements, ottl.IgnoreError, false, componenttest.NewNopTelemetrySettings())
+			processor, err := NewProcessor(tt.contextStatements, ottl.IgnoreError, false, componenttest.NewNopTelemetrySettings(), DefaultLogFunctions)
 			assert.NoError(t, err)
 
-			_, err = processor.ProcessLogs(context.Background(), td)
+			_, err = processor.ProcessLogs(t.Context(), td)
 			assert.NoError(t, err)
 
 			exTd := constructLogs()
@@ -928,10 +931,10 @@ func Test_ProcessLogs_ErrorMode(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(string(tt.context), func(t *testing.T) {
 			td := constructLogs()
-			processor, err := NewProcessor([]common.ContextStatements{{Context: tt.context, Statements: []string{`set(attributes["test"], ParseJSON(1))`}}}, ottl.PropagateError, false, componenttest.NewNopTelemetrySettings())
+			processor, err := NewProcessor([]common.ContextStatements{{Context: tt.context, Statements: []string{`set(attributes["test"], ParseJSON(1))`}}}, ottl.PropagateError, false, componenttest.NewNopTelemetrySettings(), DefaultLogFunctions)
 			assert.NoError(t, err)
 
-			_, err = processor.ProcessLogs(context.Background(), td)
+			_, err = processor.ProcessLogs(t.Context(), td)
 			assert.Error(t, err)
 		})
 	}
@@ -1010,9 +1013,9 @@ func Test_ProcessLogs_StatementsErrorMode(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			td := constructLogs()
-			processor, err := NewProcessor(tt.statements, tt.errorMode, false, componenttest.NewNopTelemetrySettings())
+			processor, err := NewProcessor(tt.statements, tt.errorMode, false, componenttest.NewNopTelemetrySettings(), DefaultLogFunctions)
 			assert.NoError(t, err)
-			_, err = processor.ProcessLogs(context.Background(), td)
+			_, err = processor.ProcessLogs(t.Context(), td)
 			if tt.wantErrorWith != "" {
 				if err == nil {
 					t.Errorf("expected error containing '%s', got: <nil>", tt.wantErrorWith)
@@ -1037,8 +1040,12 @@ func Test_ProcessLogs_CacheAccess(t *testing.T) {
 		{
 			name: "resource:resource.cache",
 			statements: []common.ContextStatements{
-				{Statements: []string{`set(resource.cache["test"], "pass")`}, SharedCache: true},
-				{Statements: []string{`set(resource.attributes["test"], resource.cache["test"])`}, SharedCache: true},
+				{
+					Statements: []string{
+						`set(resource.cache["test"], "pass")`,
+						`set(resource.attributes["test"], resource.cache["test"])`,
+					},
+				},
 			},
 			want: func(td plog.Logs) {
 				td.ResourceLogs().At(0).Resource().Attributes().PutStr("test", "pass")
@@ -1062,8 +1069,12 @@ func Test_ProcessLogs_CacheAccess(t *testing.T) {
 		{
 			name: "scope:scope.cache",
 			statements: []common.ContextStatements{
-				{Statements: []string{`set(scope.cache["test"], "pass")`}, SharedCache: true},
-				{Statements: []string{`set(scope.attributes["test"], scope.cache["test"])`}, SharedCache: true},
+				{
+					Statements: []string{
+						`set(scope.cache["test"], "pass")`,
+						`set(scope.attributes["test"], scope.cache["test"])`,
+					},
+				},
 			},
 			want: func(td plog.Logs) {
 				td.ResourceLogs().At(0).ScopeLogs().At(0).Scope().Attributes().PutStr("test", "pass")
@@ -1085,8 +1096,10 @@ func Test_ProcessLogs_CacheAccess(t *testing.T) {
 		{
 			name: "log:log.cache",
 			statements: []common.ContextStatements{
-				{Statements: []string{`set(log.cache["test"], "pass")`}, SharedCache: true},
-				{Statements: []string{`set(log.attributes["test"], log.cache["test"])`}, SharedCache: true},
+				{Statements: []string{
+					`set(log.cache["test"], "pass")`,
+					`set(log.attributes["test"], log.cache["test"])`,
+				}},
 			},
 			want: func(td plog.Logs) {
 				td.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0).Attributes().PutStr("test", "pass")
@@ -1108,36 +1121,18 @@ func Test_ProcessLogs_CacheAccess(t *testing.T) {
 			},
 		},
 		{
-			name: "cache isolation",
+			name: "log:log.cache multiple entries",
 			statements: []common.ContextStatements{
 				{
-					Statements:  []string{`set(log.cache["shared"], "fail")`},
-					SharedCache: true,
-				},
-				{
 					Statements: []string{
-						`set(log.cache["test"], "pass")`,
+						`set(log.cache["test"], log.body)`,
 						`set(log.attributes["test"], log.cache["test"])`,
-						`set(log.attributes["test"], log.cache["shared"])`,
 					},
-				},
-				{
-					Context: common.Log,
-					Statements: []string{
-						`set(cache["test"], "pass")`,
-						`set(attributes["test"], cache["test"])`,
-						`set(attributes["test"], cache["shared"])`,
-						`set(attributes["test"], log.cache["shared"])`,
-					},
-				},
-				{
-					Statements:  []string{`set(log.attributes["test"], "pass") where log.cache["shared"] == "fail"`},
-					SharedCache: true,
 				},
 			},
 			want: func(td plog.Logs) {
-				td.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0).Attributes().PutStr("test", "pass")
-				td.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(1).Attributes().PutStr("test", "pass")
+				td.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0).Attributes().PutStr("test", "operationA")
+				td.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(1).Attributes().PutStr("test", "operationB")
 			},
 		},
 	}
@@ -1145,10 +1140,60 @@ func Test_ProcessLogs_CacheAccess(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			td := constructLogs()
-			processor, err := NewProcessor(tt.statements, ottl.IgnoreError, false, componenttest.NewNopTelemetrySettings())
+			processor, err := NewProcessor(tt.statements, ottl.IgnoreError, false, componenttest.NewNopTelemetrySettings(), DefaultLogFunctions)
 			assert.NoError(t, err)
 
-			_, err = processor.ProcessLogs(context.Background(), td)
+			_, err = processor.ProcessLogs(t.Context(), td)
+			assert.NoError(t, err)
+
+			exTd := constructLogs()
+			tt.want(exTd)
+
+			assert.Equal(t, exTd, td)
+		})
+	}
+}
+
+func Test_ProcessLogs_InferredContextFromConditions(t *testing.T) {
+	tests := []struct {
+		name              string
+		contextStatements []common.ContextStatements
+		want              func(td plog.Logs)
+	}{
+		{
+			name: "inferring from statements",
+			contextStatements: []common.ContextStatements{
+				{
+					Conditions: []string{`resource.attributes["test"] == nil`},
+					Statements: []string{`set(log.attributes["test"], "pass")`},
+				},
+			},
+			want: func(td plog.Logs) {
+				td.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0).Attributes().PutStr("test", "pass")
+				td.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(1).Attributes().PutStr("test", "pass")
+			},
+		},
+		{
+			name: "inferring from conditions",
+			contextStatements: []common.ContextStatements{
+				{
+					Conditions: []string{`log.attributes["test"] == nil`},
+					Statements: []string{`set(resource.attributes["test"], "pass")`},
+				},
+			},
+			want: func(td plog.Logs) {
+				td.ResourceLogs().At(0).Resource().Attributes().PutStr("test", "pass")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			td := constructLogs()
+			processor, err := NewProcessor(tt.contextStatements, ottl.IgnoreError, false, componenttest.NewNopTelemetrySettings(), DefaultLogFunctions)
+			assert.NoError(t, err)
+
+			_, err = processor.ProcessLogs(t.Context(), td)
 			assert.NoError(t, err)
 
 			exTd := constructLogs()
@@ -1215,7 +1260,7 @@ func Test_NewProcessor_ConditionsParse(t *testing.T) {
 		t.Run(ctx, func(t *testing.T) {
 			for _, tt := range tests {
 				t.Run(tt.name, func(t *testing.T) {
-					_, err := NewProcessor(tt.statements, ottl.PropagateError, false, componenttest.NewNopTelemetrySettings())
+					_, err := NewProcessor(tt.statements, ottl.PropagateError, false, componenttest.NewNopTelemetrySettings(), DefaultLogFunctions)
 					if tt.wantErrorWith != "" {
 						if err == nil {
 							t.Errorf("expected error containing '%s', got: <nil>", tt.wantErrorWith)
@@ -1226,6 +1271,68 @@ func Test_NewProcessor_ConditionsParse(t *testing.T) {
 					require.NoError(t, err)
 				})
 			}
+		})
+	}
+}
+
+type TestFuncArguments[K any] struct{}
+
+func createTestFunc[K any](_ ottl.FunctionContext, _ ottl.Arguments) (ottl.ExprFunc[K], error) {
+	return func(_ context.Context, _ K) (any, error) {
+		return nil, nil
+	}, nil
+}
+
+func NewTestLogFuncFactory[K any]() ottl.Factory[K] {
+	return ottl.NewFactory("TestLogFunc", &TestFuncArguments[K]{}, createTestFunc[K])
+}
+
+func Test_NewProcessor_NonDefaultFunctions(t *testing.T) {
+	type testCase struct {
+		name          string
+		statements    []common.ContextStatements
+		wantErrorWith string
+		logFunctions  map[string]ottl.Factory[ottllog.TransformContext]
+	}
+
+	tests := []testCase{
+		{
+			name: "log funcs : statement with added log func",
+			statements: []common.ContextStatements{
+				{
+					Context:    common.ContextID("log"),
+					Statements: []string{`set(cache["attr"], TestLogFunc())`},
+				},
+			},
+			logFunctions: map[string]ottl.Factory[ottllog.TransformContext]{
+				"set":         DefaultLogFunctions["set"],
+				"TestLogFunc": NewTestLogFuncFactory[ottllog.TransformContext](),
+			},
+		},
+		{
+			name: "log funcs : statement with missing log func",
+			statements: []common.ContextStatements{
+				{
+					Context:    common.ContextID("log"),
+					Statements: []string{`set(cache["attr"], TestLogFunc())`},
+				},
+			},
+			wantErrorWith: `undefined function "TestLogFunc"`,
+			logFunctions:  DefaultLogFunctions,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewProcessor(tt.statements, ottl.PropagateError, false, componenttest.NewNopTelemetrySettings(), tt.logFunctions)
+			if tt.wantErrorWith != "" {
+				if err == nil {
+					t.Errorf("expected error containing '%s', got: <nil>", tt.wantErrorWith)
+				}
+				assert.Contains(t, err.Error(), tt.wantErrorWith)
+				return
+			}
+			require.NoError(t, err)
 		})
 	}
 }

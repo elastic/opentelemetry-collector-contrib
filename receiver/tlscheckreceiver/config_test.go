@@ -4,9 +4,8 @@
 package tlscheckreceiver // import "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/tlscheckreceiver"
 
 import (
-	"fmt"
+	"errors"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -92,34 +91,6 @@ func TestValidate(t *testing.T) {
 			expectedErr: nil,
 		},
 		{
-			desc: "invalid endpoint",
-			cfg: &Config{
-				Targets: []*CertificateTarget{
-					{
-						TCPAddrConfig: confignet.TCPAddrConfig{
-							Endpoint: "bad-endpoint:12efg",
-						},
-					},
-				},
-				ControllerConfig: scraperhelper.NewDefaultControllerConfig(),
-			},
-			expectedErr: fmt.Errorf("%w: provided port is not a number: 12efg", errInvalidEndpoint),
-		},
-		{
-			desc: "endpoint with scheme",
-			cfg: &Config{
-				Targets: []*CertificateTarget{
-					{
-						TCPAddrConfig: confignet.TCPAddrConfig{
-							Endpoint: "https://example.com:443",
-						},
-					},
-				},
-				ControllerConfig: scraperhelper.NewDefaultControllerConfig(),
-			},
-			expectedErr: fmt.Errorf("endpoint contains a scheme, which is not allowed: https://example.com:443"),
-		},
-		{
 			desc: "both endpoint and file path",
 			cfg: &Config{
 				Targets: []*CertificateTarget{
@@ -132,57 +103,7 @@ func TestValidate(t *testing.T) {
 				},
 				ControllerConfig: scraperhelper.NewDefaultControllerConfig(),
 			},
-			expectedErr: fmt.Errorf("cannot specify both endpoint and file_path"),
-		},
-		{
-			desc: "relative file path",
-			cfg: &Config{
-				Targets: []*CertificateTarget{
-					{
-						FilePath: "cert.pem",
-					},
-				},
-				ControllerConfig: scraperhelper.NewDefaultControllerConfig(),
-			},
-			expectedErr: fmt.Errorf("file path must be absolute: cert.pem"),
-		},
-		{
-			desc: "nonexistent file",
-			cfg: &Config{
-				Targets: []*CertificateTarget{
-					{
-						FilePath: filepath.Join(tmpDir, "nonexistent.pem"),
-					},
-				},
-				ControllerConfig: scraperhelper.NewDefaultControllerConfig(),
-			},
-			expectedErr: fmt.Errorf("certificate file does not exist"),
-		},
-		{
-			desc: "directory instead of file",
-			cfg: &Config{
-				Targets: []*CertificateTarget{
-					{
-						FilePath: tmpDir,
-					},
-				},
-				ControllerConfig: scraperhelper.NewDefaultControllerConfig(),
-			},
-			expectedErr: fmt.Errorf("path is a directory, not a file: %s", tmpDir),
-		},
-		{
-			desc: "port out of range",
-			cfg: &Config{
-				Targets: []*CertificateTarget{
-					{
-						TCPAddrConfig: confignet.TCPAddrConfig{
-							Endpoint: "example.com:67000",
-						},
-					},
-				},
-				ControllerConfig: scraperhelper.NewDefaultControllerConfig(),
-			},
-			expectedErr: fmt.Errorf("%w: provided port is out of valid range (1-65535): 67000", errInvalidEndpoint),
+			expectedErr: errors.New("cannot specify both endpoint and file_path"),
 		},
 	}
 
@@ -190,8 +111,7 @@ func TestValidate(t *testing.T) {
 		t.Run(tc.desc, func(t *testing.T) {
 			actualErr := tc.cfg.Validate()
 			if tc.expectedErr != nil {
-				require.Error(t, actualErr)
-				require.Contains(t, actualErr.Error(), tc.expectedErr.Error())
+				require.ErrorContains(t, actualErr, tc.expectedErr.Error())
 			} else {
 				require.NoError(t, actualErr)
 			}

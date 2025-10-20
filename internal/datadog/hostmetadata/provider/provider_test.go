@@ -6,11 +6,10 @@ package provider // import "github.com/open-telemetry/opentelemetry-collector-co
 import (
 	"context"
 	"errors"
-	"fmt"
 	"testing"
 	"time"
 
-	"github.com/DataDog/opentelemetry-mapping-go/pkg/otlp/attributes/source"
+	"github.com/DataDog/datadog-agent/pkg/opentelemetry-mapping-go/otlp/attributes/source"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap/zaptest"
 )
@@ -41,7 +40,7 @@ type delayedProvider struct {
 func (p *delayedProvider) Source(ctx context.Context) (source.Source, error) {
 	select {
 	case <-ctx.Done():
-		return source.Source{}, fmt.Errorf("no source provider was available")
+		return source.Source{}, errors.New("no source provider was available")
 	case <-time.After(p.delay):
 		return p.provider.Source(ctx)
 	}
@@ -151,7 +150,7 @@ func TestChain(t *testing.T) {
 				return
 			}
 
-			src, err := provider.Source(context.Background())
+			src, err := provider.Source(t.Context())
 			if err != nil || testInstance.queryErr != "" {
 				assert.EqualError(t, err, testInstance.queryErr)
 			} else {

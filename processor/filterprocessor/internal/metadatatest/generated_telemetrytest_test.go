@@ -10,9 +10,9 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata/metricdatatest"
 
-	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/filterprocessor/internal/metadata"
-
 	"go.opentelemetry.io/collector/component/componenttest"
+
+	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/filterprocessor/internal/metadata"
 )
 
 func TestSetupTelemetry(t *testing.T) {
@@ -22,11 +22,15 @@ func TestSetupTelemetry(t *testing.T) {
 	defer tb.Shutdown()
 	tb.ProcessorFilterDatapointsFiltered.Add(context.Background(), 1)
 	tb.ProcessorFilterLogsFiltered.Add(context.Background(), 1)
+	tb.ProcessorFilterProfilesFiltered.Add(context.Background(), 1)
 	tb.ProcessorFilterSpansFiltered.Add(context.Background(), 1)
 	AssertEqualProcessorFilterDatapointsFiltered(t, testTel,
 		[]metricdata.DataPoint[int64]{{Value: 1}},
 		metricdatatest.IgnoreTimestamp())
 	AssertEqualProcessorFilterLogsFiltered(t, testTel,
+		[]metricdata.DataPoint[int64]{{Value: 1}},
+		metricdatatest.IgnoreTimestamp())
+	AssertEqualProcessorFilterProfilesFiltered(t, testTel,
 		[]metricdata.DataPoint[int64]{{Value: 1}},
 		metricdatatest.IgnoreTimestamp())
 	AssertEqualProcessorFilterSpansFiltered(t, testTel,

@@ -5,7 +5,7 @@ package translation
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -23,7 +23,7 @@ func (p *firstErrorProvider) Retrieve(_ context.Context, key string) (string, er
 	defer p.mu.Unlock()
 	p.cnt++
 	if p.cnt == 1 {
-		return "", fmt.Errorf("first error")
+		return "", errors.New("first error")
 	}
 	p.cnt = 0
 	return key, nil
@@ -54,7 +54,7 @@ func TestCacheableProvider(t *testing.T) {
 			var p string
 			var err error
 			for i := 0; i < tt.retry; i++ {
-				p, err = provider.Retrieve(context.Background(), "key")
+				p, err = provider.Retrieve(t.Context(), "key")
 				if err == nil {
 					break
 				}

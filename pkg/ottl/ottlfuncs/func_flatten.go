@@ -5,6 +5,7 @@ package ottlfuncs // import "github.com/open-telemetry/opentelemetry-collector-c
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -15,7 +16,7 @@ import (
 )
 
 type FlattenArguments[K any] struct {
-	Target           ottl.PMapGetter[K]
+	Target           ottl.PMapGetSetter[K]
 	Prefix           ottl.Optional[string]
 	Depth            ottl.Optional[int64]
 	ResolveConflicts ottl.Optional[bool]
@@ -36,13 +37,13 @@ func createFlattenFunction[K any](_ ottl.FunctionContext, oArgs ottl.Arguments) 
 	args, ok := oArgs.(*FlattenArguments[K])
 
 	if !ok {
-		return nil, fmt.Errorf("FlattenFactory args must be of type *FlattenArguments[K]")
+		return nil, errors.New("FlattenFactory args must be of type *FlattenArguments[K]")
 	}
 
 	return flatten(args.Target, args.Prefix, args.Depth, args.ResolveConflicts)
 }
 
-func flatten[K any](target ottl.PMapGetter[K], p ottl.Optional[string], d ottl.Optional[int64], c ottl.Optional[bool]) (ottl.ExprFunc[K], error) {
+func flatten[K any](target ottl.PMapGetSetter[K], p ottl.Optional[string], d ottl.Optional[int64], c ottl.Optional[bool]) (ottl.ExprFunc[K], error) {
 	depth := int64(math.MaxInt64)
 	if !d.IsEmpty() {
 		depth = d.Get()
@@ -69,9 +70,7 @@ func flatten[K any](target ottl.PMapGetter[K], p ottl.Optional[string], d ottl.O
 
 		flattenData := initFlattenData(resolveConflict, depth)
 		flattenData.flattenMap(m, prefix, 0)
-		flattenData.result.MoveTo(m)
-
-		return nil, nil
+		return nil, target.Set(ctx, tCtx, flattenData.result)
 	}, nil
 }
 
@@ -85,7 +84,7 @@ func initFlattenData(resolveConflict bool, maxDepth int64) *flattenData {
 }
 
 func (f *flattenData) flattenMap(m pcommon.Map, prefix string, currentDepth int64) {
-	if len(prefix) > 0 {
+	if prefix != "" {
 		prefix += "."
 	}
 	for k, v := range m.All() {

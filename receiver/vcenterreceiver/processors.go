@@ -5,6 +5,7 @@ package vcenterreceiver // import "github.com/open-telemetry/opentelemetry-colle
 
 import (
 	"fmt"
+	"maps"
 	"time"
 
 	"github.com/vmware/govmomi/vim25/mo"
@@ -15,7 +16,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/vcenterreceiver/internal/metadata"
 )
 
-type DatacenterStats struct {
+type datacenterStats struct {
 	ClusterStatusCounts map[types.ManagedEntityStatus]int64
 	HostStats           map[string]map[types.ManagedEntityStatus]int64
 	VMStats             map[string]map[types.ManagedEntityStatus]int64
@@ -30,7 +31,7 @@ type DatacenterStats struct {
 func (v *vcenterMetricScraper) processDatacenterData(dc *mo.Datacenter, errs *scrapererror.ScrapeErrors) {
 	// Init for current collection
 	now := pcommon.NewTimestampFromTime(time.Now())
-	dcStats := &DatacenterStats{
+	dcStats := &datacenterStats{
 		ClusterStatusCounts: make(map[types.ManagedEntityStatus]int64),
 		HostStats:           make(map[string]map[types.ManagedEntityStatus]int64),
 		VMStats:             make(map[string]map[types.ManagedEntityStatus]int64),
@@ -47,7 +48,7 @@ func (v *vcenterMetricScraper) processDatacenterData(dc *mo.Datacenter, errs *sc
 func (v *vcenterMetricScraper) buildDatacenterMetrics(
 	ts pcommon.Timestamp,
 	dc *mo.Datacenter,
-	dcStats *DatacenterStats,
+	dcStats *datacenterStats,
 ) {
 	// Create Datacenter resource builder
 	rb := v.createDatacenterResourceBuilder(dc)
@@ -62,7 +63,7 @@ func (v *vcenterMetricScraper) buildDatacenterMetrics(
 func (v *vcenterMetricScraper) processDatastores(
 	ts pcommon.Timestamp,
 	dc *mo.Datacenter,
-	dcStats *DatacenterStats,
+	dcStats *datacenterStats,
 ) {
 	for _, ds := range v.scrapeData.datastores {
 		v.buildDatastoreMetrics(ts, dc, ds)
@@ -136,7 +137,7 @@ func (v *vcenterMetricScraper) buildResourcePoolMetrics(
 func (v *vcenterMetricScraper) processHosts(
 	ts pcommon.Timestamp,
 	dc *mo.Datacenter,
-	dcStats *DatacenterStats,
+	dcStats *datacenterStats,
 	errs *scrapererror.ScrapeErrors,
 ) map[string]*types.ManagedObjectReference {
 	vmRefToComputeRef := map[string]*types.ManagedObjectReference{}
@@ -157,9 +158,7 @@ func (v *vcenterMetricScraper) processHosts(
 
 		// Populate master VM to CR relationship map from
 		// single Host based version of it
-		for vmRef, csRef := range hsVMRefToComputeRef {
-			vmRefToComputeRef[vmRef] = csRef
-		}
+		maps.Copy(vmRefToComputeRef, hsVMRefToComputeRef)
 	}
 
 	return vmRefToComputeRef
@@ -220,7 +219,7 @@ func (v *vcenterMetricScraper) processVMs(
 	ts pcommon.Timestamp,
 	dc *mo.Datacenter,
 	vmRefToComputeRef map[string]*types.ManagedObjectReference,
-	dcStats *DatacenterStats,
+	dcStats *datacenterStats,
 	errs *scrapererror.ScrapeErrors,
 ) map[string]*vmGroupInfo {
 	vmGroupInfoByComputeRef := map[string]*vmGroupInfo{}
@@ -281,7 +280,7 @@ func (v *vcenterMetricScraper) buildVMMetrics(
 	// Get related VM compute info
 	crRef = vmRefToComputeRef[vm.Reference().Value]
 	if crRef == nil {
-		return crRef, groupInfo, fmt.Errorf("no ComputeResource ref found for VM: %s", vm.Name)
+		return nil, groupInfo, fmt.Errorf("no ComputeResource ref found for VM: %s", vm.Name)
 	}
 	cr := v.scrapeData.computesByRef[crRef.Value]
 	if cr == nil {
@@ -307,7 +306,7 @@ func (v *vcenterMetricScraper) buildVMMetrics(
 	}
 
 	groupInfo = &vmGroupInfo{poweredOff: 0, poweredOn: 0, suspended: 0, templates: 0}
-	if vm.Config.Template {
+	if vm.Config != nil && vm.Config.Template {
 		groupInfo.templates++
 	} else {
 		switch vm.Runtime.PowerState {
@@ -347,7 +346,7 @@ func (v *vcenterMetricScraper) processClusters(
 	ts pcommon.Timestamp,
 	dc *mo.Datacenter,
 	vmStatesByComputeRef map[string]*vmGroupInfo,
-	dcStats *DatacenterStats,
+	dcStats *datacenterStats,
 	errs *scrapererror.ScrapeErrors,
 ) {
 	for crRef, cr := range v.scrapeData.computesByRef {

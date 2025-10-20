@@ -14,7 +14,7 @@ import (
 	"github.com/relvacode/iso8601"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
-	conventions "go.opentelemetry.io/collector/semconv/v1.13.0"
+	conventions "go.opentelemetry.io/otel/semconv/v1.13.0"
 	"go.uber.org/zap"
 	"golang.org/x/exp/slices"
 )
@@ -88,7 +88,8 @@ func (r ResourceLogsUnmarshaler) UnmarshalLogs(buf []byte) (plog.Logs, error) {
 
 	var resourceIDs []string
 	azureResourceLogs := make(map[string][]azureLogRecord)
-	for _, azureLog := range azureLogs.Records {
+	for i := range azureLogs.Records {
+		azureLog := azureLogs.Records[i]
 		azureResourceLogs[azureLog.ResourceID] = append(azureResourceLogs[azureLog.ResourceID], azureLog)
 		keyExists := slices.Contains(resourceIDs, azureLog.ResourceID)
 		if !keyExists {
@@ -105,7 +106,7 @@ func (r ResourceLogsUnmarshaler) UnmarshalLogs(buf []byte) (plog.Logs, error) {
 		scopeLogs.Scope().SetVersion(r.Version)
 		logRecords := scopeLogs.LogRecords()
 
-		for i := 0; i < len(logs); i++ {
+		for i := range logs {
 			log := logs[i]
 			nanos, err := getTimestamp(log, r.TimeFormats...)
 			if err != nil {
@@ -208,10 +209,10 @@ func extractRawAttributes(log azureLogRecord) map[string]any {
 	setIf(attrs, azureResultType, log.ResultType)
 	setIf(attrs, azureTenantID, log.TenantID)
 
-	setIf(attrs, conventions.AttributeCloudRegion, log.Location)
-	attrs[conventions.AttributeCloudProvider] = conventions.AttributeCloudProviderAzure
+	setIf(attrs, string(conventions.CloudRegionKey), log.Location)
+	attrs[string(conventions.CloudProviderKey)] = conventions.CloudProviderAzure.Value.AsString()
 
-	setIf(attrs, conventions.AttributeNetSockPeerAddr, log.CallerIPAddress)
+	setIf(attrs, string(conventions.NetSockPeerAddrKey), log.CallerIPAddress)
 	return attrs
 }
 

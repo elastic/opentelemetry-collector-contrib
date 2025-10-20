@@ -6,6 +6,7 @@ package ottlfuncs // import "github.com/open-telemetry/opentelemetry-collector-c
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -33,7 +34,7 @@ func createSortFunction[K any](_ ottl.FunctionContext, oArgs ottl.Arguments) (ot
 	args, ok := oArgs.(*SortArguments[K])
 
 	if !ok {
-		return nil, fmt.Errorf("SortFactory args must be of type *SortArguments[K]")
+		return nil, errors.New("SortFactory args must be of type *SortArguments[K]")
 	}
 
 	order := sortAsc
@@ -168,7 +169,7 @@ func findCommonValueType(slice pcommon.Slice) (pcommon.ValueType, bool) {
 	wantStr := false
 	wantDouble := false
 
-	for i := 0; i < length; i++ {
+	for i := range length {
 		value := slice.At(i)
 		currType := value.Type()
 
@@ -226,7 +227,7 @@ type convertedValue[T targetType] struct {
 func makeConvertedCopy[T targetType](slice pcommon.Slice, converter func(idx int) T) []convertedValue[T] {
 	length := slice.Len()
 	var out []convertedValue[T]
-	for i := 0; i < length; i++ {
+	for i := range length {
 		cv := convertedValue[T]{
 			value:         converter(i),
 			originalValue: slice.At(i).AsRaw(),

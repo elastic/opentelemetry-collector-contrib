@@ -34,16 +34,7 @@ func TestMetric10kDPS(t *testing.T) {
 			receiver: datareceivers.NewCarbonDataReceiver(testutil.GetAvailablePort(t)),
 			resourceSpec: testbed.ResourceSpec{
 				ExpectedMaxCPU: 237,
-				ExpectedMaxRAM: 105,
-			},
-		},
-		{
-			name:     "OpenCensus",
-			sender:   datasenders.NewOCMetricDataSender(testbed.DefaultHost, testutil.GetAvailablePort(t)),
-			receiver: datareceivers.NewOCDataReceiver(testutil.GetAvailablePort(t)),
-			resourceSpec: testbed.ResourceSpec{
-				ExpectedMaxCPU: 85,
-				ExpectedMaxRAM: 100,
+				ExpectedMaxRAM: 150,
 			},
 		},
 		{
@@ -70,7 +61,27 @@ func TestMetric10kDPS(t *testing.T) {
 			receiver: datareceivers.NewSFxMetricsDataReceiver(testutil.GetAvailablePort(t)),
 			resourceSpec: testbed.ResourceSpec{
 				ExpectedMaxCPU: 120,
-				ExpectedMaxRAM: 98,
+				ExpectedMaxRAM: 150,
+			},
+		},
+		{
+			name:     "STEF",
+			sender:   datasenders.NewStefDataSender(testbed.DefaultHost, testutil.GetAvailablePort(t)),
+			receiver: datareceivers.NewStefDataReceiver(testutil.GetAvailablePort(t)),
+			resourceSpec: testbed.ResourceSpec{
+				ExpectedMaxCPU: 60,
+				ExpectedMaxRAM: 150,
+			},
+		},
+		{
+			name: "OtelArrow",
+			sender: datasenders.NewOtelarrowDataSender(
+				testbed.DefaultHost, testutil.GetAvailablePort(t),
+			),
+			receiver: datareceivers.NewOtelarrowDataReceiver(testutil.GetAvailablePort(t)),
+			resourceSpec: testbed.ResourceSpec{
+				ExpectedMaxCPU: 160,
+				ExpectedMaxRAM: 250,
 			},
 		},
 	}

@@ -7,6 +7,7 @@
 |               | [beta]: traces, metrics, logs   |
 | Distributions | [contrib], [k8s] |
 | Issues        | [![Open issues](https://img.shields.io/github/issues-search/open-telemetry/opentelemetry-collector-contrib?query=is%3Aissue%20is%3Aopen%20label%3Aprocessor%2Fresourcedetection%20&label=open&color=orange&logo=opentelemetry)](https://github.com/open-telemetry/opentelemetry-collector-contrib/issues?q=is%3Aopen+is%3Aissue+label%3Aprocessor%2Fresourcedetection) [![Closed issues](https://img.shields.io/github/issues-search/open-telemetry/opentelemetry-collector-contrib?query=is%3Aissue%20is%3Aclosed%20label%3Aprocessor%2Fresourcedetection%20&label=closed&color=blue&logo=opentelemetry)](https://github.com/open-telemetry/opentelemetry-collector-contrib/issues?q=is%3Aclosed+is%3Aissue+label%3Aprocessor%2Fresourcedetection) |
+| Code coverage | [![codecov](https://codecov.io/github/open-telemetry/opentelemetry-collector-contrib/graph/main/badge.svg?component=processor_resourcedetection)](https://app.codecov.io/gh/open-telemetry/opentelemetry-collector-contrib/tree/main/?components%5B0%5D=processor_resourcedetection&displayType=list) |
 | [Code Owners](https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/CONTRIBUTING.md#becoming-a-code-owner)    | [@Aneurysm9](https://www.github.com/Aneurysm9), [@dashpole](https://www.github.com/dashpole) |
 
 [development]: https://github.com/open-telemetry/opentelemetry-collector/blob/main/docs/component-stability.md#development
@@ -318,6 +319,12 @@ processors:
 
 ### Amazon EKS
 
+This detector reads resource information from the [EC2 instance metadata service](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-metadata.html) to retrieve related resource attributes.
+If IMDS is not available, (example: EKS-AutoMode and POD not on the hostnetwork), it falls back to a combination of [Kubernetes API](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.25/#-strong-kubernetes-api-v1-25-strong-)
+and [EC2 API](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DescribeInstances.html) to retrieve related resource attributes.
+
+EC2 API requires the `EC2:DescribeInstances` permission to be granted to the IAM role. If IMDS is not accessible, ex: EKS-AutoMode, you can use [POD Identity](https://docs.aws.amazon.com/eks/latest/userguide/pod-identities.html).
+
 The list of the populated resource attributes can be found at [EKS Detector Resource Attributes](./internal/aws/eks/documentation.md).
 
 Example:
@@ -349,6 +356,29 @@ processors:
 
 Note: The kubernetes cluster name is only available when running on EC2 instances, and requires permission to run the `EC2:DescribeInstances` [action](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DescribeInstances.html).
 If you see an error with the message `context deadline exceeded`, please increase the timeout setting in your config.
+
+#### Node Name Env Variable
+When using the EC2 API and the Kubernetes API to retrieve resource attributes, the node name is needed. The node name is extracted from the env variable you define on the pod.
+The node name env variable that contains the node name value can be set using the `node_from_env_var` option:
+
+```yaml
+processors:
+  resourcedetection/eks:
+    detectors: [eks]
+    timeout: 15s
+    override: false
+    eks:
+      node_from_env_var: K8S_NODE_NAME
+```
+In this example, the env variable `K8S_NODE_NAME` will hold the actual node name and can be set in the pod spec using the downward API.
+
+```yaml
+        env:
+          - name: K8S_NODE_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: spec.nodeName
+```
 
 ### AWS Lambda
 
@@ -468,8 +498,42 @@ Queries the K8S API server to retrieve kubeadm resource attributes:
 
 The list of the populated resource attributes can be found at [kubeadm Detector Resource Attributes](./internal/kubeadm/documentation.md).
 
+---
+
+### Oracle Cloud Infrastructure (OCI) metadata
+
+Queries the [Oracle Cloud Infrastructure (OCI) metadata service](https://docs.oracle.com/en-us/iaas/Content/Compute/Tasks/gettingmetadata.htm)
+to retrieve resource attributes related to the OCI instance environment.
+
+The list of the populated resource attributes can be found at [OracleCloud Detector Resource Attributes](./internal/oraclecloud/documentation.md).
+
+Example:
+
+```yaml
+processors:
+  resourcedetection/oraclecloud:
+    detectors: [env, oraclecloud]
+    timeout: 2s
+    override: false
+```
+
+**Populated resource attributes:**
+- `cloud.provider`
+- `cloud.platform`
+- `cloud.region`
+- `cloud.availability_zone`
+- `host.id`
+- `host.name`
+- `host.type`
+- `k8s.cluster.name`
+
+See [internal/oraclecloud/documentation.md](./internal/oraclecloud/documentation.md) for detailed attribute definitions.
+
+---
+
 The following permissions are required:
 ```yaml
+apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: otel-collector
@@ -624,10 +688,145 @@ other sources to the collector, then these describe the monitored entity in the 
 Overriding these with the collector's own identifier would instead make the telemetry appear as if it was coming from the collector
 or the collector's host instead, which might be inaccurate.
 
+### Hetzner
+
+Uses the [Hetzner metadata API](https://docs.hetzner.cloud/reference/cloud#server-metadata) to read resource information from the instance metadata service and populate related resource attributes.
+
+The list of the populated resource attributes can be found at [Hetzner Detector Resource Attributes](./internal/hetzner/documentation.md).
+
+Hetzner custom configuration example:
+
+```yaml
+processors:
+  resourcedetection/hetzner:
+    detectors: ["hetzner"]
+```
+
+### Akamai
+
+Uses the [Akamai metadata API](https://techdocs.akamai.com/cloud-computing/docs/metadata-service-api) to read resource information from the instance metadata service and populate related resource attributes.
+
+The list of the populated resource attributes can be found at [Akamai Detector Resource Attributes](./internal/akamai/documentation.md).
+
+Akamai custom configuration example:
+
+```yaml
+processors:
+  resourcedetection/akamai:
+    detectors: ["akamai"]
+```
+
+### Scaleway
+
+Uses the Scaleway metadata API to read resource information from the instance metadata service and populate related resource attributes.
+
+The list of the populated resource attributes can be found at [Scaleway Detector Resource Attributes](./internal/scaleway/documentation.md).
+
+Scaleway custom configuration example:
+
+```yaml
+processors:
+  resourcedetection/scaleway:
+    detectors: ["scaleway"]
+```
+
+### Upcloud
+
+Uses the [Upcloud metadata API](https://upcloud.com/docs/guides/upcloud-metadata-service/) to read resource information from the instance metadata service and populate related resource attributes.
+
+The list of the populated resource attributes can be found at [Upcloud Detector Resource Attributes](./internal/upcloud/documentation.md).
+
+Upcloud custom configuration example:
+
+```yaml
+processors:
+  resourcedetection/upcloud:
+    detectors: ["upcloud"]
+```
+
+The Upcloud detector will report an error in logs if the metadata endpoint is unavailable. You can configure the detector to instead fail with this flag:
+
+```yaml
+processors:
+  resourcedetection/upcloud:
+    detectors: ["upcloud"]
+    upcloud:
+      fail_on_missing_metadata: true
+```
+
+### Vultr
+
+Uses the [Vultr metadata API](https://www.vultr.com/metadata/) to read resource information from the instance metadata service and populate related resource attributes.
+
+The list of the populated resource attributes can be found at [Vultr Detector Resource Attributes](./internal/vultr/documentation.md).
+
+Vultr custom configuration example:
+
+```yaml
+processors:
+  resourcedetection/vultr:
+    detectors: ["vultr"]
+```
+
+### Digital Ocean
+
+Uses the [Digital Ocean metadata API](https://docs.digitalocean.com/reference/api/metadata/) to read resource information from the instance metadata service and populate related resource attributes.
+
+The list of the populated resource attributes can be found at [Digital Ocean Detector Resource Attributes](./internal/digitalocean/documentation.md).
+
+Akamai custom configuration example:
+
+```yaml
+processors:
+  resourcedetection/digitalocean:
+    detectors: ["digitalocean"]
+```
+
+The Vultr detector will report an error in logs if the metadata endpoint is unavailable. You can configure the detector to instead fail with this flag:
+
+```yaml
+processors:
+  resourcedetection/vultr:
+    detectors: ["vultr"]
+    vultr:
+      fail_on_missing_metadata: true
+```
+
+### Openstack Nova
+
+Uses the [OpenStack Nova metadata API](https://docs.openstack.org/nova/latest/user/metadata.html) to read resource information from the instance metadata service and populate related resource attributes.
+
+The list of the populated resource attributes can be found at [Nova Detector Resource Attributes](./internal/openstack/nova/documentation.md).
+
+It can also optionally capture metadata keys from the `"meta"` section of `meta_data.json` as resource attributes, using regular expressions to match the keys you want.
+
+Nova custom configuration example:
+```yaml
+processors:
+  resourcedetection/nova:
+    detectors: ["nova"]
+    nova:
+      # A list of regex's to match label keys to add as resource attributes can be specified
+      labels:
+        - ^tag1$
+        - ^tag2$
+        - ^label.*$
+```
+
+The Nova detector will report an error in logs if the metadata endpoint is unavailable. You can configure the detector to instead fail with this flag:
+
+```yaml
+processors:
+  resourcedetection/nova:
+    detectors: ["nova"]
+    nova:
+      fail_on_missing_metadata: true
+```
+
 ## Configuration
 
 ```yaml
-# a list of resource detectors to run, valid options are: "env", "system", "gcp", "ec2", "ecs", "elastic_beanstalk", "eks", "lambda", "azure", "heroku", "openshift", "dynatrace"
+# a list of resource detectors to run, valid options are: "env", "system", "gcp", "ec2", "ecs", "elastic_beanstalk", "eks", "lambda", "azure", "aks", "heroku", "openshift", "dynatrace", "consul", "docker", "k8snode, "kubeadm", "hetzner", "akamai", "scaleway", "vultr", "oraclecloud", "digitalocean", "nova", "upcloud"
 detectors: [ <string> ]
 # determines if existing resource attributes should be overridden or preserved, defaults to true
 override: <bool>

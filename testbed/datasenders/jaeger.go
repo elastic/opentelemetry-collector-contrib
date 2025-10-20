@@ -68,7 +68,7 @@ func (je *jaegerGRPCDataSender) GenConfigYAMLStr() string {
         endpoint: "%s"`, je.GetEndpoint())
 }
 
-func (je *jaegerGRPCDataSender) ProtocolName() string {
+func (*jaegerGRPCDataSender) ProtocolName() string {
 	return "jaeger"
 }
 
@@ -97,7 +97,7 @@ func (cfg *jaegerConfig) Validate() error {
 func (je *jaegerGRPCDataSender) newTracesExporter(set exporter.Settings) (exporter.Traces, error) {
 	cfg := jaegerConfig{}
 	cfg.Endpoint = je.GetEndpoint().String()
-	cfg.TLSSetting = configtls.ClientConfig{
+	cfg.TLS = configtls.ClientConfig{
 		Insecure: true,
 	}
 
@@ -174,7 +174,7 @@ func (s *protoGRPCSender) shutdown(context.Context) error {
 
 func (s *protoGRPCSender) start(ctx context.Context, host component.Host) error {
 	if s.clientSettings == nil {
-		return fmt.Errorf("client settings not found")
+		return errors.New("client settings not found")
 	}
 	conn, err := s.clientSettings.ToClientConn(ctx, host, s.settings)
 	if err != nil {

@@ -4,11 +4,10 @@
 package ecs // import "github.com/open-telemetry/opentelemetry-collector-contrib/internal/datadog/hostmetadata/internal/ecs"
 
 import (
-	"context"
-	"fmt"
+	"errors"
 	"testing"
 
-	"github.com/DataDog/opentelemetry-mapping-go/pkg/otlp/attributes/source"
+	"github.com/DataDog/datadog-agent/pkg/opentelemetry-mapping-go/otlp/attributes/source"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/aws/ecsutil"
@@ -22,7 +21,7 @@ type mockProvider struct {
 }
 
 func (*mockProvider) FetchContainerMetadata() (*ecsutil.ContainerMetadata, error) {
-	return nil, fmt.Errorf("not implemented")
+	return nil, errors.New("not implemented")
 }
 
 func (p *mockProvider) FetchTaskMetadata() (*ecsutil.TaskMetadata, error) {
@@ -68,7 +67,7 @@ func TestECSProvider(t *testing.T) {
 		},
 		{
 			name:     "endpoint query failed",
-			provider: newMock(nil, fmt.Errorf("network error")),
+			provider: newMock(nil, errors.New("network error")),
 
 			onErr:  "failed to fetch task metadata: network error",
 			srcErr: "failed to fetch task metadata: network error",
@@ -91,14 +90,14 @@ func TestECSProvider(t *testing.T) {
 				missingEndpoint: testInstance.missingEndpoint,
 				ecsMetadata:     testInstance.provider,
 			}
-			src, srcErr := p.Source(context.Background())
+			src, srcErr := p.Source(t.Context())
 			if srcErr != nil || testInstance.srcErr != "" {
 				assert.EqualError(t, srcErr, testInstance.srcErr)
 			} else {
 				assert.Equal(t, testInstance.src, src)
 			}
 
-			onECSFargate, onErr := p.OnECSFargate(context.Background())
+			onECSFargate, onErr := p.OnECSFargate(t.Context())
 			if onErr != nil || testInstance.onErr != "" {
 				assert.EqualError(t, onErr, testInstance.onErr)
 			} else {

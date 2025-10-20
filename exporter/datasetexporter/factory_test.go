@@ -4,7 +4,7 @@
 package datasetexporter
 
 import (
-	"fmt"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -129,12 +129,13 @@ func TestLoadConfig(t *testing.T) {
 					MaxInterval:         12 * time.Nanosecond,
 					MaxElapsedTime:      13 * time.Nanosecond,
 				},
-				QueueSettings: exporterhelper.QueueBatchConfig{
-					Enabled:      true,
-					NumConsumers: 14,
-					QueueSize:    15,
-					Sizer:        exporterhelper.RequestSizerTypeRequests,
-				},
+				QueueSettings: func() exporterhelper.QueueBatchConfig {
+					queue := exporterhelper.NewDefaultQueueConfig()
+					queue.Enabled = true
+					queue.NumConsumers = 14
+					queue.QueueSize = 15
+					return queue
+				}(),
 				TimeoutSettings: exporterhelper.TimeoutConfig{
 					Timeout: 16 * time.Nanosecond,
 				},
@@ -172,33 +173,33 @@ func TestValidateConfigs(t *testing.T) {
 	}
 }
 
-type CreateTest struct {
+type createTest struct {
 	name          string
 	config        component.Config
 	expectedError error
 }
 
-func createExporterTests() []CreateTest {
+func createExporterTests() []createTest {
 	factory := NewFactory()
 	defaultCfg := factory.CreateDefaultConfig().(*Config)
 	defaultCfg.APIKey = "default-api-key"
 	defaultCfg.DatasetURL = "https://app.eu.scalyr.com"
 
-	return []CreateTest{
+	return []createTest{
 		{
 			name:          "broken",
 			config:        &Config{},
-			expectedError: fmt.Errorf("api_key is required"),
+			expectedError: errors.New("api_key is required"),
 		},
 		{
 			name:          "missing-url",
 			config:        &Config{APIKey: "AAA"},
-			expectedError: fmt.Errorf("dataset_url is required"),
+			expectedError: errors.New("dataset_url is required"),
 		},
 		{
 			name:          "missing-key",
 			config:        &Config{DatasetURL: "bbb"},
-			expectedError: fmt.Errorf("api_key is required"),
+			expectedError: errors.New("api_key is required"),
 		},
 		{
 			name: "valid",

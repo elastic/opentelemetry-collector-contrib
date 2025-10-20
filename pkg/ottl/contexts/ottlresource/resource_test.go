@@ -4,7 +4,6 @@
 package ottlresource
 
 import (
-	"context"
 	"slices"
 	"testing"
 
@@ -374,7 +373,6 @@ func Test_newPathGetSetter(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			testCache := pcommon.NewMap()
 			cacheGetter := func(tCtx TransformContext) pcommon.Map {
 				return tCtx.cache
 			}
@@ -383,12 +381,12 @@ func Test_newPathGetSetter(t *testing.T) {
 
 			resource := createTelemetry()
 
-			tCtx := NewTransformContext(resource, pmetric.NewResourceMetrics(), WithCache(&testCache))
-			got, err := accessor.Get(context.Background(), tCtx)
+			tCtx := NewTransformContext(resource, pmetric.NewResourceMetrics())
+			got, err := accessor.Get(t.Context(), tCtx)
 			assert.NoError(t, err)
 			assert.Equal(t, tt.orig, got)
 
-			err = accessor.Set(context.Background(), tCtx, tt.newVal)
+			err = accessor.Set(t.Context(), tCtx, tt.newVal)
 			assert.NoError(t, err)
 
 			exRes := createTelemetry()
@@ -396,22 +394,8 @@ func Test_newPathGetSetter(t *testing.T) {
 			tt.modified(exRes, exCache)
 
 			assert.Equal(t, exRes, resource)
-			assert.Equal(t, exCache, testCache)
 		})
 	}
-}
-
-func Test_newPathGetSetter_WithCache(t *testing.T) {
-	cacheValue := pcommon.NewMap()
-	cacheValue.PutStr("test", "pass")
-
-	tCtx := NewTransformContext(
-		pcommon.NewResource(),
-		pmetric.NewResourceMetrics(),
-		WithCache(&cacheValue),
-	)
-
-	assert.Equal(t, cacheValue, getCache(tCtx))
 }
 
 func createTelemetry() pcommon.Resource {

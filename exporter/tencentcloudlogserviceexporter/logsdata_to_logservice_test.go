@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
-	conventions "go.opentelemetry.io/collector/semconv/v1.27.0"
+	conventions "go.opentelemetry.io/otel/semconv/v1.27.0"
 )
 
 type logKeyValuePair struct {
@@ -44,13 +44,13 @@ func createLogData(numberOfLogs int) plog.Logs {
 	logs.ResourceLogs().AppendEmpty() // Add an empty ResourceLogs
 	rl := logs.ResourceLogs().AppendEmpty()
 	rl.Resource().Attributes().PutStr("resourceKey", "resourceValue")
-	rl.Resource().Attributes().PutStr(conventions.AttributeServiceName, "test-log-service-exporter")
-	rl.Resource().Attributes().PutStr(conventions.AttributeHostName, "test-host")
+	rl.Resource().Attributes().PutStr(string(conventions.ServiceNameKey), "test-log-service-exporter")
+	rl.Resource().Attributes().PutStr(string(conventions.HostNameKey), "test-host")
 	sl := rl.ScopeLogs().AppendEmpty()
 	sl.Scope().SetName("collector")
 	sl.Scope().SetVersion("v0.1.0")
 
-	for i := 0; i < numberOfLogs; i++ {
+	for i := range numberOfLogs {
 		ts := pcommon.Timestamp(int64(i) * time.Millisecond.Nanoseconds())
 		logRecord := sl.LogRecords().AppendEmpty()
 		switch i {
@@ -73,9 +73,9 @@ func createLogData(numberOfLogs int) plog.Logs {
 		default:
 			logRecord.Body().SetStr("log contents")
 		}
-		logRecord.Attributes().PutStr(conventions.AttributeServiceName, "myapp")
+		logRecord.Attributes().PutStr(string(conventions.ServiceNameKey), "myapp")
 		logRecord.Attributes().PutStr("my-label", "myapp-type")
-		logRecord.Attributes().PutStr(conventions.AttributeHostName, "myhost")
+		logRecord.Attributes().PutStr(string(conventions.HostNameKey), "myhost")
 		logRecord.Attributes().PutStr("custom", "custom")
 		logRecord.Attributes().PutEmpty("null-value")
 
@@ -107,7 +107,7 @@ func TestConvertLogs(t *testing.T) {
 	wantLogs := make([][]logKeyValuePair, 0, validLogCount)
 	resultLogFile := "./testdata/logservice_log_data.json"
 	require.NoError(t, loadFromJSON(resultLogFile, &wantLogs))
-	for j := 0; j < validLogCount; j++ {
+	for j := range validLogCount {
 		sort.Sort(logKeyValuePairs(gotLogPairs[j]))
 		sort.Sort(logKeyValuePairs(wantLogs[j]))
 		assert.Equal(t, wantLogs[j], gotLogPairs[j])

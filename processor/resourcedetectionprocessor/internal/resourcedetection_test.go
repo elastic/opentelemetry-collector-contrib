@@ -24,18 +24,18 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor/internal/metadata"
 )
 
-type MockDetector struct {
+type mockDetector struct {
 	mock.Mock
 }
 
-func (p *MockDetector) Detect(_ context.Context) (pcommon.Resource, string, error) {
+func (p *mockDetector) Detect(_ context.Context) (pcommon.Resource, string, error) {
 	args := p.Called()
 	return args.Get(0).(pcommon.Resource), "", args.Error(1)
 }
 
 type mockDetectorConfig struct{}
 
-func (d *mockDetectorConfig) GetConfigFromType(_ DetectorType) DetectorConfig {
+func (*mockDetectorConfig) GetConfigFromType(_ DetectorType) DetectorConfig {
 	return nil
 }
 
@@ -91,12 +91,12 @@ func TestDetect(t *testing.T) {
 			mockDetectorTypes := make([]DetectorType, 0, len(tt.detectedResources))
 
 			for i, resAttrs := range tt.detectedResources {
-				md := &MockDetector{}
+				md := &mockDetector{}
 				res := pcommon.NewResource()
 				require.NoError(t, res.Attributes().FromRaw(resAttrs))
 				md.On("Detect").Return(res, nil)
 
-				mockDetectorType := DetectorType(fmt.Sprintf("mockdetector%v", i))
+				mockDetectorType := DetectorType(fmt.Sprintf("mockDetector%v", i))
 				mockDetectors[mockDetectorType] = func(processor.Settings, DetectorConfig) (Detector, error) {
 					return md, nil
 				}
@@ -107,7 +107,7 @@ func TestDetect(t *testing.T) {
 			p, err := f.CreateResourceProvider(processortest.NewNopSettings(metadata.Type), time.Second, tt.attributes, &mockDetectorConfig{}, mockDetectorTypes...)
 			require.NoError(t, err)
 
-			got, _, err := p.Get(context.Background(), &http.Client{Timeout: 10 * time.Second})
+			got, _, err := p.Get(t.Context(), &http.Client{Timeout: 10 * time.Second})
 			require.NoError(t, err)
 
 			assert.Equal(t, tt.expectedResource, got.Attributes().AsRaw())
@@ -140,16 +140,16 @@ func TestDetectResource_Error_ContextDeadline_WithErrPropagation(t *testing.T) {
 		_ = featuregate.GlobalRegistry().Set(allowErrorPropagationFeatureGate.ID(), false)
 	}()
 
-	md1 := &MockDetector{}
-	md1.On("Detect").Return(pcommon.NewResource(), fmt.Errorf("err1"))
+	md1 := &mockDetector{}
+	md1.On("Detect").Return(pcommon.NewResource(), errors.New("err1"))
 
-	md2 := &MockDetector{}
+	md2 := &mockDetector{}
 	md2.On("Detect").Return(pcommon.NewResource(), errors.New("err2"))
 
 	p := NewResourceProvider(zap.NewNop(), time.Second, nil, md1, md2)
 
 	var cancel context.CancelFunc
-	ctx, cancel := context.WithTimeout(context.TODO(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
 
 	_, _, err = p.Get(ctx, &http.Client{Timeout: 10 * time.Second})
@@ -159,16 +159,16 @@ func TestDetectResource_Error_ContextDeadline_WithErrPropagation(t *testing.T) {
 }
 
 func TestDetectResource_Error_ContextDeadline_WithoutErrPropagation(t *testing.T) {
-	md1 := &MockDetector{}
-	md1.On("Detect").Return(pcommon.NewResource(), fmt.Errorf("err1"))
+	md1 := &mockDetector{}
+	md1.On("Detect").Return(pcommon.NewResource(), errors.New("err1"))
 
-	md2 := &MockDetector{}
+	md2 := &mockDetector{}
 	md2.On("Detect").Return(pcommon.NewResource(), errors.New("err2"))
 
 	p := NewResourceProvider(zap.NewNop(), time.Second, nil, md1, md2)
 
 	var cancel context.CancelFunc
-	ctx, cancel := context.WithTimeout(context.TODO(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
 
 	_, _, err := p.Get(ctx, &http.Client{Timeout: 10 * time.Second})
@@ -208,16 +208,16 @@ func TestMergeResource(t *testing.T) {
 	}
 }
 
-type MockParallelDetector struct {
+type mockParallelDetector struct {
 	mock.Mock
 	ch chan struct{}
 }
 
-func NewMockParallelDetector() *MockParallelDetector {
-	return &MockParallelDetector{ch: make(chan struct{})}
+func newMockParallelDetector() *mockParallelDetector {
+	return &mockParallelDetector{ch: make(chan struct{})}
 }
 
-func (p *MockParallelDetector) Detect(_ context.Context) (pcommon.Resource, string, error) {
+func (p *mockParallelDetector) Detect(_ context.Context) (pcommon.Resource, string, error) {
 	<-p.ch
 	args := p.Called()
 	return args.Get(0).(pcommon.Resource), "", args.Error(1)
@@ -228,12 +228,12 @@ func (p *MockParallelDetector) Detect(_ context.Context) (pcommon.Resource, stri
 func TestDetectResource_Parallel(t *testing.T) {
 	const iterations = 5
 
-	md1 := NewMockParallelDetector()
+	md1 := newMockParallelDetector()
 	res1 := pcommon.NewResource()
 	require.NoError(t, res1.Attributes().FromRaw(map[string]any{"a": "1", "b": "2"}))
 	md1.On("Detect").Return(res1, nil)
 
-	md2 := NewMockParallelDetector()
+	md2 := newMockParallelDetector()
 	res2 := pcommon.NewResource()
 	require.NoError(t, res2.Attributes().FromRaw(map[string]any{"a": "11", "c": "3"}))
 	md2.On("Detect").Return(res2, nil)
@@ -245,10 +245,10 @@ func TestDetectResource_Parallel(t *testing.T) {
 	// call p.Get multiple times
 	wg := &sync.WaitGroup{}
 	wg.Add(iterations)
-	for i := 0; i < iterations; i++ {
+	for range iterations {
 		go func() {
 			defer wg.Done()
-			detected, _, err := p.Get(context.Background(), &http.Client{Timeout: 10 * time.Second})
+			detected, _, err := p.Get(t.Context(), &http.Client{Timeout: 10 * time.Second})
 			assert.NoError(t, err)
 			assert.Equal(t, expectedResourceAttrs, detected.Attributes().AsRaw())
 		}()
@@ -268,13 +268,13 @@ func TestDetectResource_Parallel(t *testing.T) {
 }
 
 func TestDetectResource_Reconnect(t *testing.T) {
-	md1 := &MockDetector{}
+	md1 := &mockDetector{}
 	res1 := pcommon.NewResource()
 	require.NoError(t, res1.Attributes().FromRaw(map[string]any{"a": "1", "b": "2"}))
 	md1.On("Detect").Return(pcommon.NewResource(), errors.New("connection error1")).Twice()
 	md1.On("Detect").Return(res1, nil)
 
-	md2 := &MockDetector{}
+	md2 := &mockDetector{}
 	res2 := pcommon.NewResource()
 	require.NoError(t, res2.Attributes().FromRaw(map[string]any{"c": "3"}))
 	md2.On("Detect").Return(pcommon.NewResource(), errors.New("connection error2")).Once()
@@ -284,7 +284,7 @@ func TestDetectResource_Reconnect(t *testing.T) {
 
 	p := NewResourceProvider(zap.NewNop(), time.Second, nil, md1, md2)
 
-	detected, _, err := p.Get(context.Background(), &http.Client{Timeout: 15 * time.Second})
+	detected, _, err := p.Get(t.Context(), &http.Client{Timeout: 15 * time.Second})
 	assert.NoError(t, err)
 	assert.Equal(t, expectedResourceAttrs, detected.Attributes().AsRaw())
 

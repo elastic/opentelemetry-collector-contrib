@@ -7,6 +7,8 @@ package coralogixexporter // import "github.com/open-telemetry/opentelemetry-col
 
 import (
 	"context"
+	"errors"
+	"time"
 
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/config/configcompression"
@@ -34,37 +36,44 @@ func NewFactory() exporter.Factory {
 }
 
 func createDefaultConfig() component.Config {
-	batcherConfig := exporterhelper.NewDefaultBatcherConfig() //nolint:staticcheck
-	batcherConfig.Enabled = false
-
 	return &Config{
 		QueueSettings:   exporterhelper.NewDefaultQueueConfig(),
 		BackOffConfig:   configretry.NewDefaultBackOffConfig(),
 		TimeoutSettings: exporterhelper.NewDefaultTimeoutConfig(),
-		DomainSettings: configgrpc.ClientConfig{
-			Compression: configcompression.TypeGzip,
-		},
-		ClientConfig: configgrpc.ClientConfig{
-			Endpoint: "https://",
+		DomainSettings: TransportConfig{
+			ClientConfig: configgrpc.ClientConfig{
+				Compression: configcompression.TypeGzip,
+			},
 		},
 		// Traces GRPC client
-		Traces: configgrpc.ClientConfig{
-			Endpoint:    "https://",
-			Compression: configcompression.TypeGzip,
+		Traces: TransportConfig{
+			ClientConfig: configgrpc.ClientConfig{
+				Endpoint:    "https://",
+				Compression: configcompression.TypeGzip,
+			},
 		},
-		Metrics: configgrpc.ClientConfig{
-			Endpoint: "https://",
-			// Default to gzip compression
-			Compression:     configcompression.TypeGzip,
-			WriteBufferSize: 512 * 1024,
+		Metrics: TransportConfig{
+			ClientConfig: configgrpc.ClientConfig{
+				Endpoint: "https://",
+				// Default to gzip compression
+				Compression:     configcompression.TypeGzip,
+				WriteBufferSize: 512 * 1024,
+			},
 		},
-		Logs: configgrpc.ClientConfig{
-			Endpoint:    "https://",
-			Compression: configcompression.TypeGzip,
+		Logs: TransportConfig{
+			ClientConfig: configgrpc.ClientConfig{
+				Endpoint:    "https://",
+				Compression: configcompression.TypeGzip,
+			},
 		},
-		PrivateKey:    "",
-		AppName:       "",
-		BatcherConfig: batcherConfig,
+		PrivateKey: "",
+		AppName:    "",
+		RateLimiter: RateLimiterConfig{
+			Enabled:   true,
+			Threshold: 10,
+			Duration:  time.Minute,
+		},
+		Protocol: grpcProtocol,
 	}
 }
 
@@ -74,10 +83,6 @@ func createTraceExporter(
 	config component.Config,
 ) (exporter.Traces, error) {
 	cfg := config.(*Config)
-
-	if cfg.BatcherConfig.Enabled {
-		set.Logger.Warn("`batcher` is deprecated, please use `sending_queue` instead")
-	}
 
 	exporter, err := newTracesExporter(cfg, set)
 	if err != nil {
@@ -95,7 +100,6 @@ func createTraceExporter(
 		exporterhelper.WithQueue(cfg.QueueSettings),
 		exporterhelper.WithStart(exporter.start),
 		exporterhelper.WithShutdown(exporter.shutdown),
-		exporterhelper.WithBatcher(cfg.BatcherConfig), //nolint:staticcheck
 	)
 }
 
@@ -105,10 +109,6 @@ func createMetricsExporter(
 	config component.Config,
 ) (exporter.Metrics, error) {
 	cfg := config.(*Config)
-
-	if cfg.BatcherConfig.Enabled {
-		set.Logger.Warn("`batcher` is deprecated, please use `sending_queue` instead")
-	}
 
 	oce, err := newMetricsExporter(cfg, set)
 	if err != nil {
@@ -126,7 +126,6 @@ func createMetricsExporter(
 		exporterhelper.WithQueue(cfg.QueueSettings),
 		exporterhelper.WithStart(oce.start),
 		exporterhelper.WithShutdown(oce.shutdown),
-		exporterhelper.WithBatcher(cfg.BatcherConfig), //nolint:staticcheck
 	)
 }
 
@@ -136,10 +135,6 @@ func createLogsExporter(
 	config component.Config,
 ) (exporter.Logs, error) {
 	cfg := config.(*Config)
-
-	if cfg.BatcherConfig.Enabled {
-		set.Logger.Warn("`batcher` is deprecated, please use `sending_queue` instead")
-	}
 
 	oce, err := newLogsExporter(cfg, set)
 	if err != nil {
@@ -157,7 +152,6 @@ func createLogsExporter(
 		exporterhelper.WithQueue(cfg.QueueSettings),
 		exporterhelper.WithStart(oce.start),
 		exporterhelper.WithShutdown(oce.shutdown),
-		exporterhelper.WithBatcher(cfg.BatcherConfig), //nolint:staticcheck
 	)
 }
 
@@ -168,8 +162,9 @@ func createProfilesExporter(
 ) (xexporter.Profiles, error) {
 	cfg := config.(*Config)
 
-	if cfg.BatcherConfig.Enabled {
-		set.Logger.Warn("`batcher` is deprecated, please use `sending_queue` instead")
+	// Validate that HTTP protocol is not used with profiles
+	if cfg.Protocol == "http" {
+		return nil, errors.New("profiles signal is not supported with HTTP protocol, use gRPC protocol (default) instead")
 	}
 
 	oce, err := newProfilesExporter(cfg, set)
@@ -177,7 +172,7 @@ func createProfilesExporter(
 		return nil, err
 	}
 
-	return xexporterhelper.NewProfilesExporter(
+	return xexporterhelper.NewProfiles(
 		ctx,
 		set,
 		cfg,
@@ -188,6 +183,5 @@ func createProfilesExporter(
 		exporterhelper.WithQueue(cfg.QueueSettings),
 		exporterhelper.WithStart(oce.start),
 		exporterhelper.WithShutdown(oce.shutdown),
-		exporterhelper.WithBatcher(cfg.BatcherConfig), //nolint:staticcheck
 	)
 }
