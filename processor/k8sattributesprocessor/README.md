@@ -8,7 +8,7 @@
 | Warnings      | [Memory consumption, Other](#warnings) |
 | Issues        | [![Open issues](https://img.shields.io/github/issues-search/open-telemetry/opentelemetry-collector-contrib?query=is%3Aissue%20is%3Aopen%20label%3Aprocessor%2Fk8sattributes%20&label=open&color=orange&logo=opentelemetry)](https://github.com/open-telemetry/opentelemetry-collector-contrib/issues?q=is%3Aopen+is%3Aissue+label%3Aprocessor%2Fk8sattributes) [![Closed issues](https://img.shields.io/github/issues-search/open-telemetry/opentelemetry-collector-contrib?query=is%3Aissue%20is%3Aclosed%20label%3Aprocessor%2Fk8sattributes%20&label=closed&color=blue&logo=opentelemetry)](https://github.com/open-telemetry/opentelemetry-collector-contrib/issues?q=is%3Aclosed+is%3Aissue+label%3Aprocessor%2Fk8sattributes) |
 | Code coverage | [![codecov](https://codecov.io/github/open-telemetry/opentelemetry-collector-contrib/graph/main/badge.svg?component=processor_k8sattributes)](https://app.codecov.io/gh/open-telemetry/opentelemetry-collector-contrib/tree/main/?components%5B0%5D=processor_k8sattributes&displayType=list) |
-| [Code Owners](https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/CONTRIBUTING.md#becoming-a-code-owner)    | [@dmitryax](https://www.github.com/dmitryax), [@fatsheep9146](https://www.github.com/fatsheep9146), [@TylerHelmuth](https://www.github.com/TylerHelmuth), [@ChrsMark](https://www.github.com/ChrsMark) |
+| [Code Owners](https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/CONTRIBUTING.md#becoming-a-code-owner)    | [@dmitryax](https://www.github.com/dmitryax), [@fatsheep9146](https://www.github.com/fatsheep9146), [@TylerHelmuth](https://www.github.com/TylerHelmuth), [@ChrsMark](https://www.github.com/ChrsMark), [@odubajDT](https://www.github.com/odubajDT) |
 | Emeritus      | [@rmfitzpatrick](https://www.github.com/rmfitzpatrick) |
 
 [development]: https://github.com/open-telemetry/opentelemetry-collector/blob/main/docs/component-stability.md#development
@@ -24,7 +24,6 @@ to the relevant spans, metrics and logs as resource attributes. The processor us
 running in a cluster, keeps a record of their IP addresses, pod UIDs and interesting metadata.
 The rules for associating the data passing through the processor (spans, metrics and logs) with specific Pod Metadata are configured via "pod_association" key.
 It represents a list of associations that are executed in the specified order until the first one is able to do the match.
-
 
 ## Configuration
 
@@ -125,7 +124,7 @@ correctly associate the matching container to the resource:
    instance. If it's not set, the latest container instance will be used:
    - container.id (not added by default, has to be specified in `metadata`)
 
-Please note, however, that only `container.id` attribute can be used for source rules in the pod_association.
+Please note, however, that only `container.id` attribute can be used for source rules in the pod_association. To use `container.id` in pod association, at least one container attribute must be included in the `metadata` extraction configuration (e.g., `container.id`, `container.image.name`, etc.).
 
 Example for extracting container level attributes:
 
@@ -268,10 +267,29 @@ The processor can be configured to set the
 [recommended resource attributes](https://opentelemetry.io/docs/specs/semconv/non-normative/k8s-attributes/):
 
 - `otel_annotations` will translate `resource.opentelemetry.io/foo` to the `foo` resource attribute, etc.
+- `deployment_name_from_replicaset` allows extracting deployment name from replicaset name by trimming pod template hash. This will disable watching for replicaset resources, which can be useful in environments with limited RBAC permissions as the processor will not need `get`, `watch`, and `list` permissions for `replicasets`. It also reduces memory consumption of the processor. When enabled, this feature works automatically with the existing deployment name extraction. Take the following ownerReference of a pod managed by deployment for example:
+
+```yaml
+  ownerReferences:                                                  
+  - apiVersion: apps/v1
+    blockOwnerDeletion: true
+    controller: true 
+    kind: ReplicaSet
+    name: opentelemetry-collector-6c45f8d6f6
+    uid: ee75293d-14ec-42a0-9548-a768d9e07c48
+```
+
+The Extracted deployment name is: `opentelemetry-collector`.
+
+> Please note, if your pods are managed by a replicaset but not by a deployment the `k8s.deployment.name` will be set incorrectly. For example, if the replicaset is named `opentelemetry-collector-6c45f8d6f6`, the feature will still set the deployment name of the pod to  `opentelemetry-collector` because it skips watching for the deployment and has no context if the pod is managed by a deployment or a replicaset.
+Another edge case to be aware of is when the deployment name is long. Kubernetes may truncate it in the ReplicaSet name to ensure there is enough space for the pod template hash suffix, so the full name fits within the DNS subdomain limit (253 characters). In such cases, the extracted k8s.deployment.name will be the truncated form, not the original full deployment name.
+
+Example:
 
 ```yaml
   extract:
     otel_annotations: true
+    deployment_name_from_replicaset: true
     metadata:
       - service.namespace
       - service.name
@@ -321,11 +339,157 @@ k8sattributes:
         - from: connection
 ```
 
+## Common Use Cases
+
+### Example 1: Basic Agent Deployment (DaemonSet)
+
+Minimal configuration for an agent collecting telemetry from pods on the same node:
+
+```yaml
+processors:
+  k8sattributes:
+    # Use downward API to automatically filter by current node
+    filter:
+      node_from_env_var: KUBE_NODE_NAME
+    # Extract common metadata
+    extract:
+      metadata:
+        - k8s.namespace.name
+        - k8s.pod.name
+        - k8s.pod.uid
+        - k8s.deployment.name
+        - k8s.node.name
+    # Default connection-based pod association
+    pod_association:
+      - sources:
+          - from: connection
+```
+
+Required environment variable in your collector DaemonSet:
+```yaml
+env:
+  - name: KUBE_NODE_NAME
+    valueFrom:
+      fieldRef:
+        fieldPath: spec.nodeName
+```
+
+### Example 2: Gateway Deployment with Resource Attribute Association
+
+Gateway configuration that receives telemetry from agents that have already added pod IP:
+
+```yaml
+processors:
+  k8sattributes:
+    # Extract comprehensive metadata
+    extract:
+      metadata:
+        - k8s.namespace.name
+        - k8s.pod.name
+        - k8s.pod.uid
+        - k8s.deployment.name
+        - k8s.statefulset.name
+        - k8s.daemonset.name
+        - k8s.node.name
+      # Extract custom labels
+      labels:
+        - tag_name: deployment_mode
+          key: deployment_mode
+          from: pod
+        - tag_name: owner_team
+          key: team
+          from: pod
+    # Associate by resource attributes set by agents
+    pod_association:
+      - sources:
+          - from: resource_attribute
+            name: k8s.pod.ip
+```
+
+### Example 3: Production Deployment with Namespace Filtering
+
+Configuration for monitoring a specific namespace with comprehensive metadata:
+
+```yaml
+processors:
+  k8sattributes:
+    filter:
+      namespace: production
+    extract:
+      metadata:
+        - k8s.namespace.name
+        - k8s.pod.name
+        - k8s.pod.uid
+        - k8s.deployment.name
+        - k8s.node.name
+        - service.name
+        - service.version
+      labels:
+        - tag_name: team
+          key: team
+          from: namespace
+        - tag_name: environment
+          key: environment
+          from: pod
+      annotations:
+        - tag_name: commit_sha
+          key: git-commit
+          from: pod
+      otel_annotations: true
+```
+
+### Example 4: Memory-Optimized Configuration
+
+Minimal memory footprint configuration for large clusters:
+
+```yaml
+processors:
+  k8sattributes:
+    filter:
+      node_from_env_var: KUBE_NODE_NAME
+    extract:
+      # Only extract essential fields
+      metadata:
+        - k8s.namespace.name
+        - k8s.pod.name
+        - k8s.pod.uid
+        - k8s.deployment.name
+      # Use deployment name extraction without watching replicasets
+      deployment_name_from_replicaset: true
+```
+
+### Example 5: Multi-Container Pod Support
+
+Configuration for extracting container-level metadata:
+
+```yaml
+processors:
+  k8sattributes:
+    filter:
+      node_from_env_var: KUBE_NODE_NAME
+    extract:
+      metadata:
+        - k8s.namespace.name
+        - k8s.pod.name
+        - k8s.pod.uid
+        - k8s.container.name
+        - container.id
+        - container.image.name
+        - container.image.tag
+    # Associate by container ID for multi-container pods
+    pod_association:
+      - sources:
+          - from: resource_attribute
+            name: container.id
+      - sources:
+          - from: connection
+```
+
 ## Role-based access control
 
 ## Cluster-scoped RBAC
 
-If you'd like to set up the k8sattributesprocessor to receive telemetry from across namespaces, it will need `get`, `watch` and `list` permissions on both `pods` and `namespaces` resources, for all namespaces and pods included in the configured filters. Additionally, when using `k8s.deployment.name` (which is enabled by default) or `k8s.deployment.uid` the processor also needs `get`, `watch` and `list` permissions for `replicasets` resources. When using `k8s.node.uid` or extracting metadata from `node`, the processor needs `get`, `watch` and `list` permissions for `nodes` resources. When using `k8s.cronjob.uid` the processor also needs `get`, `watch` and `list` permissions for `jobs` resources.
+If you'd like to set up the k8sattributesprocessor to receive telemetry from across namespaces, it will need `get`, `watch` and `list` permissions on both `pods` and `namespaces` resources, for all namespaces and pods included in the configured filters. Additionally, when using `k8s.deployment.name` (which is enabled by default) or `k8s.deployment.uid` the processor also needs `get`, `watch` and `list` permissions for `replicasets` resources (unless `deployment_name_from_replicaset` is enabled). When using `k8s.node.uid` or extracting metadata from `node`, the processor needs `get`, `watch` and `list` permissions for `nodes` resources. When using `k8s.cronjob.uid` the processor also needs `get`, `watch` and `list` permissions for `jobs` resources.
 
 Here is an example of a `ClusterRole` to give a `ServiceAccount` the necessary permissions for all pods, nodes, and namespaces in the cluster (replace `<OTEL_COL_NAMESPACE>` with a namespace where collector is deployed):
 
@@ -375,7 +539,7 @@ k8sattributes:
   filter:
     namespace: <WORKLOAD_NAMESPACE>
 ```
-With the namespace filter set, the processor will only look up pods and replicasets in the selected namespace. Note that with just a role binding, the processor cannot query metadata such as labels and annotations from k8s `nodes` and `namespaces` which are cluster-scoped objects. This also means that the processor cannot set the value for `k8s.cluster.uid` attribute if enabled, since the `k8s.cluster.uid` attribute is set to the uid of the namespace `kube-system` which is not queryable with namespaced rbac.
+With the namespace filter set, the processor will only look up pods and replicasets (if `deployment_name_from_replicaset` is not enabled) in the selected namespace. Note that with just a role binding, the processor cannot query metadata such as labels and annotations from k8s `nodes` and `namespaces` which are cluster-scoped objects. This also means that the processor cannot set the value for `k8s.cluster.uid` attribute if enabled, since the `k8s.cluster.uid` attribute is set to the uid of the namespace `kube-system` which is not queryable with namespaced rbac.
 
 Please note, when extracting the workload related attributes, these workloads need to be present in the `Role` with the correct permissions. For example, an extraction of `k8s.deployment.label.*` attributes, `deployments` need to be present in `Role`.
 
@@ -520,39 +684,13 @@ timestamp value as an RFC3339 compliant timestamp.
 
 ## Feature Gates
 
-### `k8sattr.fieldExtractConfigRegex.disallow`
-
-The `k8sattr.fieldExtractConfigRegex.disallow` [feature gate](https://github.com/open-telemetry/opentelemetry-collector/blob/main/featuregate/README.md#collector-feature-gates) disallows the usage of the `extract.annotations.regex` and `extract.labels.regex` fields.
-The feature gate is in `stable` stage, which means it can no longer be disabled and is therefore enabled by default.
-
-#### Migration
-
-Deprecation of the `extract.annotations.regex` and `extract.labels.regex` fields means that it is recommended to use the `ExtractPatterns` function from the transform processor instead. To convert your current configuration please check the `ExtractPatterns` function [documentation](https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/pkg/ottl/ottlfuncs#extractpatterns). You should use the `pattern` parameter of `ExtractPatterns` instead of using the `extract.annotations.regex` and `extract.labels.regex` fields.
-
-##### Example
-
-The following configuration of `k8sattributes processor`:
-
-`config.yaml`:
-
-  ```yaml
-  annotations:
-    - tag_name: a2 # extracts value of annotation with key `annotation2` with regexp and inserts it as a tag with key `a2`
-      key: annotation2
-      regex: field=(?P<value>.+)
-      from: pod
-  ```
-
-can be converted with the usage of `ExtractPatterns` function:
-
-```yaml
-  - set(cache["annotations"], ExtractPatterns(attributes["k8s.pod.annotations["annotation2"], "field=(?P<value>.+))")
-  - set(k8s.pod.annotations["a2"], cache["annotations"]["value"])
-```
-
 ### `k8sattr.labelsAnnotationsSingular.allow`
 
 The `k8sattr.labelsAnnotationsSingular.allow` feature gate, when enabled, changes the default resource attribute key format from `k8s.<workload>.labels.<label-key>` to `k8s.<workload>.label.<label-key>` and `k8s.<workload>.annotations.<annotation-key>` to `k8s.<workload>.annotation.<annotation-key>`.
+
+This affects both:
+- Runtime attribute extraction from Kubernetes metadata
+- Default tag names in configuration when `tag_name` is not specified
 
 The reason behind this change is to align the Kubernetes related resource attribute keys with the latest semantic conventions.
 
