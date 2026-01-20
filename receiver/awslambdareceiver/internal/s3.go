@@ -23,6 +23,7 @@ type s3API interface {
 // S3Service define services exposed for consumers
 type S3Service interface {
 	ReadObject(ctx context.Context, bucketName, objectKey string) ([]byte, error)
+	GetReader(ctx context.Context, bucketName, objectKey string) (io.ReadCloser, error)
 	ListObjects(ctx context.Context, bucketName, continuationToken, prefix string) (*s3.ListObjectsV2Output, error)
 	DeleteObject(ctx context.Context, bucketName, objectKey string) error
 }
@@ -67,6 +68,17 @@ func (s *s3ServiceClient) ReadObject(ctx context.Context, bucketName, objectKey 
 	}
 
 	return body, nil
+}
+
+func (s *s3ServiceClient) GetReader(ctx context.Context, bucketName, objectKey string) (io.ReadCloser, error) {
+	params := s3.GetObjectInput{Bucket: &bucketName, Key: &objectKey}
+
+	out, err := s.api.GetObject(ctx, &params)
+	if err != nil {
+		return nil, fmt.Errorf("unable to to download file from S3: %w", err)
+	}
+
+	return out.Body, nil
 }
 
 func (s *s3ServiceClient) ListObjects(ctx context.Context, bucketName, continuationToken, prefix string) (*s3.ListObjectsV2Output, error) {

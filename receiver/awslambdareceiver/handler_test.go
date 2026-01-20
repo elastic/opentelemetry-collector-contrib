@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -213,9 +214,10 @@ func TestProcessLambdaEvent_S3LogNotification(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			s3Service := internal.NewMockS3Service(ctr)
+			reader := io.NopCloser(bytes.NewReader(test.s3MockContent.data))
 			s3Service.EXPECT().
-				ReadObject(gomock.Any(), test.s3MockContent.bucketName, test.s3MockContent.objectKey).
-				Return(test.s3MockContent.data, nil).
+				GetReader(gomock.Any(), test.s3MockContent.bucketName, test.s3MockContent.objectKey).
+				Return(reader, nil).
 				AnyTimes()
 
 			// Wrap the consumer to match the new s3EventConsumerFunc signature
@@ -308,7 +310,8 @@ func TestS3HandlerParseEvent(t *testing.T) {
 
 	ctr := gomock.NewController(t)
 	s3Service := internal.NewMockS3Service(ctr)
-	s3Service.EXPECT().ReadObject(gomock.Any(), gomock.Any(), gomock.Any()).Return([]byte("S3 content"), nil).AnyTimes()
+	reader := io.NopCloser(bytes.NewReader([]byte("S3 content")))
+	s3Service.EXPECT().GetReader(gomock.Any(), gomock.Any(), gomock.Any()).Return(reader, nil).AnyTimes()
 
 	var consumer noOpLogsConsumer
 	// Wrap the consumer to match the new s3EventConsumerFunc signature
@@ -499,7 +502,8 @@ func TestConsumerErrorHandling(t *testing.T) {
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
 			s3Service := internal.NewMockS3Service(ctr)
-			s3Service.EXPECT().ReadObject(gomock.Any(), gomock.Any(), gomock.Any()).Return([]byte("object content"), nil).Times(1)
+			reader := io.NopCloser(bytes.NewReader([]byte("object content")))
+			s3Service.EXPECT().GetReader(gomock.Any(), gomock.Any(), gomock.Any()).Return(reader, nil).Times(1)
 
 			// Consumer that returns the test error
 			logsConsumer := func(_ context.Context, _ events.S3EventRecord, _ plog.Logs) error {
@@ -625,4 +629,45 @@ func compressData(t *testing.T, data []byte) []byte {
 	err = gzipWriter.Close()
 	require.NoError(t, err)
 	return buf.Bytes()
+}
+
+func Test_isVPCFlowLog(t *testing.T) {
+	tests := []struct {
+		name string
+		log  string
+		want bool
+	}{
+		{
+			name: "VPC default log",
+			log:  "version account-id interface-id srcaddr dstaddr srcport dstport protocol packets bytes start end action log-status",
+			want: true,
+		},
+		{
+			name: "VPC custom - 1",
+			log:  "start end action log-status",
+			want: true,
+		},
+		{
+			name: "VPC custom - 2",
+			log:  "subnet-id ecs-task-definition-arn ecs-second-container-id",
+			want: true,
+		},
+		{
+			name: "Other log - text",
+			log:  "version is something can be in another log",
+			want: false,
+		},
+		{
+			name: "Other log - json",
+			log:  `{"foo": "bar"}`,
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isVPCFlowLog(tt.log); got != tt.want {
+				t.Errorf("isVPCFlowLog() = %v, want %v", got, tt.want)
+			}
+		})
+	}
 }

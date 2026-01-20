@@ -4,6 +4,7 @@
 package awslambdareceiver // import "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/awslambdareceiver"
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -11,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -27,6 +29,12 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/awslambdareceiver/internal"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/awslambdareceiver/internal/metadata"
 )
+
+// s3StreamBatchSize defines the size of data chunks read from S3 object stream for processing.
+const s3StreamBatchSize = 10_000_000 // 10MB chunks
+
+// readerBufferSize defines the buffer size for buffered readers.
+const readerBufferSize = 128 * 1024 // 128KB buffer size
 
 type emits interface {
 	plog.Logs | pmetric.Metrics
@@ -127,12 +135,82 @@ func (s *s3Handler[T]) handle(ctx context.Context, event json.RawMessage) error 
 		return nil
 	}
 
-	body, err := s.s3Service.ReadObject(ctx, parsedEvent.S3.Bucket.Name, parsedEvent.S3.Object.URLDecodedKey)
+	s3Reader, err := s.s3Service.GetReader(ctx, parsedEvent.S3.Bucket.Name, parsedEvent.S3.Object.URLDecodedKey)
 	if err != nil {
 		return err
 	}
 
-	data, err := s.s3Unmarshaler(body)
+	defer func() {
+		_ = s3Reader.Close()
+	}()
+
+	wrappedReader, err := gunzipIfNeeded(s3Reader)
+	if err != nil {
+		return fmt.Errorf("failed to derive reader with wrapper: %w", err)
+	}
+
+	defer func() {
+		if gzReader, ok := wrappedReader.(*gzip.Reader); ok {
+			_ = gzReader.Close()
+		}
+	}()
+
+	var bufReader *bufio.Reader
+	if br, ok := wrappedReader.(*bufio.Reader); ok {
+		bufReader = br
+	} else {
+		bufReader = bufio.NewReaderSize(wrappedReader, readerBufferSize)
+	}
+
+	var header []byte
+	buffer := bytes.NewBuffer(make([]byte, 0, s3StreamBatchSize))
+	firstLine := true
+
+	for {
+		// since streaming, always check for context cancellation
+		select {
+		case <-ctx.Done():
+			return errors.New("context cancelled, exiting S3 object processing")
+		default:
+		}
+
+		line, err := bufReader.ReadBytes('\n')
+		if firstLine && len(line) > 0 {
+			firstLine = false
+			if isVPCFlowLog(string(line)) {
+				header = make([]byte, len(line))
+				copy(header, line)
+				s.logger.Debug("Received AWS VPC flow event", zap.ByteString("Event", header))
+			}
+		}
+
+		isEOF := errors.Is(err, io.EOF)
+		if err != nil && !isEOF {
+			return fmt.Errorf("failed to read S3 object data: %w", err)
+		}
+
+		buffer.Write(line)
+
+		if buffer.Len() >= s3StreamBatchSize || (isEOF && buffer.Len() > 0) {
+			err := s.processBatch(ctx, buffer.Bytes(), parsedEvent)
+			if err != nil {
+				return err
+			}
+
+			buffer.Reset()
+			buffer.Write(header)
+		}
+
+		if isEOF {
+			break
+		}
+	}
+
+	return nil
+}
+
+func (s *s3Handler[T]) processBatch(ctx context.Context, batch []byte, parsedEvent events.S3EventRecord) error {
+	data, err := s.s3Unmarshaler(batch)
 	if err != nil {
 		return fmt.Errorf("failed to unmarshal S3 data: %w", err)
 	}
@@ -294,4 +372,52 @@ func checkConsumerErrorAndWrap(err error) error {
 
 	// Plain error - wrap as retryable
 	return consumererror.NewRetryableError(err)
+}
+
+// vpcFields is a map of known VPC flow log fields for basic validation
+// Source: https://docs.aws.amazon.com/vpc/latest/userguide/flow-log-records.html#flow-logs-fields
+var vpcFields = map[string]int{
+	"version": 2, "account-id": 2, "interface-id": 2, "srcaddr": 2, "dstaddr": 2, "srcport": 2,
+	"dstport": 2, "protocol": 2, "packets": 2, "bytes": 2, "start": 2, "end": 2, "action": 2, "log-status": 2,
+	"vpc-id": 3, "subnet-id": 3, "instance-id": 3, "tcp-flags": 3, "type": 3, "pkt-srcaddr": 3,
+	"region": 4, "az-id": 4, "sublocation-type": 4, "sublocation-id": 4, "pkt-dst-aws-service": 5, "flow-direction": 5, "traffic-path": 5,
+	"ecs-cluster-arn": 7, "ecs-cluster-name": 7, "ecs-container-instance-arn": 7, "ecs-container-instance-id": 7,
+	"ecs-container-id": 7, "ecs-second-container-id": 7, "ecs-service-name": 7, "ecs-task-definition-arn": 7,
+	"ecs-task-arn": 7, "ecs-task-id": 7, "reject-reason": 8, "resource-id": 9, "encryption-status": 10,
+}
+
+// isVPCFlowLog is supposed to process the first VPC flow log line with field descriptions.
+// It returns true if all fields in the log line are known VPC flow log fields.
+func isVPCFlowLog(logLine string) bool {
+	fields := strings.Fields(logLine)
+
+	if len(fields) == 0 {
+		return false
+	}
+
+	for _, field := range fields {
+		if _, ok := vpcFields[field]; !ok {
+			return false
+		}
+	}
+
+	return true
+}
+
+// gunzipIfNeeded checks if the provided reader is a gzipped stream and returns a reader with gunzip wrapping if needed.
+func gunzipIfNeeded(r io.ReadCloser) (io.Reader, error) {
+	buf := bufio.NewReaderSize(r, readerBufferSize)
+	header, err := buf.Peek(2)
+	if err != nil {
+		return nil, err
+	}
+	// gzip magic number: 0x1f 0x8b
+	if header[0] == 0x1f && header[1] == 0x8b {
+		gr, err := gzip.NewReader(buf)
+		if err != nil {
+			return nil, err
+		}
+		return gr, nil
+	}
+	return buf, nil
 }
