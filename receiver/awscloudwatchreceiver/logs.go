@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs/types"
 	"go.opentelemetry.io/collector/component"
@@ -31,9 +30,8 @@ const (
 
 type logsReceiver struct {
 	settings                      receiver.Settings
+	cfg                           *Config
 	region                        string
-	profile                       string
-	imdsEndpoint                  string
 	pollInterval                  time.Duration
 	maxEventsPerRequest           int
 	initialStartTime              time.Time
@@ -138,11 +136,10 @@ func newLogsReceiver(cfg *Config, settings receiver.Settings, consumer consumer.
 
 	return &logsReceiver{
 		settings:            settings,
+		cfg:                 cfg,
 		region:              cfg.Region,
-		profile:             cfg.Profile,
 		consumer:            consumer,
 		maxEventsPerRequest: cfg.Logs.MaxEventsPerRequest,
-		imdsEndpoint:        cfg.IMDSEndpoint,
 		autodiscover:        autodiscover,
 		pollInterval:        cfg.Logs.PollInterval,
 		initialStartTime:    startTime,
@@ -476,19 +473,10 @@ func (l *logsReceiver) ensureSession() error {
 		return nil
 	}
 
-	cfgOptions := []func(*config.LoadOptions) error{
-		config.WithRegion(l.region),
+	awsCfg, err := loadAWSConfig(context.Background(), l.cfg)
+	if err != nil {
+		return err
 	}
-
-	if l.imdsEndpoint != "" {
-		cfgOptions = append(cfgOptions, config.WithEC2IMDSEndpoint(l.imdsEndpoint))
-	}
-
-	if l.profile != "" {
-		cfgOptions = append(cfgOptions, config.WithSharedConfigProfile(l.profile))
-	}
-
-	cfg, err := config.LoadDefaultConfig(context.Background(), cfgOptions...)
-	l.client = cloudwatchlogs.NewFromConfig(cfg)
-	return err
+	l.client = cloudwatchlogs.NewFromConfig(awsCfg)
+	return nil
 }

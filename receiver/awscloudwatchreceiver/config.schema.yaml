@@ -18,6 +18,24 @@ $defs:
         type: string
       streams:
         $ref: stream_config
+  credentials_config:
+    description: 'CredentialsConfig configures the AWS credentials used to call the CloudWatch APIs. When absent, the default SDK credential chain is used (environment variables, shared config/credentials files, EC2/ECS roles, IRSA, ...). Static credentials (access_key_id/secret_access_key/session_token) and role assumption (role_arn/external_id) compose: when both are set, the static credentials are used as the base identity to assume the role. When only role_arn is set, the default chain provides the base identity.'
+    type: object
+    properties:
+      access_key_id:
+        description: AccessKeyID and SecretAccessKey are static AWS credentials. They must be set together.
+        type: string
+      external_id:
+        description: ExternalID is the external ID to pass in the AssumeRole call. Requires RoleARN.
+        type: string
+      role_arn:
+        description: RoleARN is the ARN of an IAM role to assume via STS.
+        type: string
+      secret_access_key:
+        $ref: go.opentelemetry.io/collector/config/configopaque.string
+      session_token:
+        description: SessionToken is the token for temporary static credentials, if used.
+        $ref: go.opentelemetry.io/collector/config/configopaque.string
   group_config:
     description: GroupConfig is the configuration for log group collection
     type: object
@@ -118,6 +136,9 @@ $defs:
 description: Config is the overall config structure for the awscloudwatchreceiver
 type: object
 properties:
+  credentials:
+    x-optional: true
+    $ref: credentials_config
   imds_endpoint:
     type: string
   logs:

@@ -101,3 +101,20 @@ awscloudwatch/metrics-discovery-no-namespace:
     period: 120s
     discovery:
       limit: 50
+
+awscloudwatch/credentials-static:
+  region: us-west-1
+  credentials:
+    access_key_id: AKIAIOSFODNN7EXAMPLE
+    secret_access_key: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+    session_token: SESSIONTOKEN
+  logs:
+    poll_interval: 1m
+
+awscloudwatch/credentials-role:
+  region: us-west-1
+  credentials:
+    role_arn: arn:aws:iam::123456789012:role/monitoring
+    external_id: my-external-id
+  logs:
+    poll_interval: 1m

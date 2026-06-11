@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componenttest"
+	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/consumer/consumertest"
 	"go.opentelemetry.io/collector/receiver"
 	"go.uber.org/zap"
@@ -937,4 +938,21 @@ func (mc *mockClient) DescribeLogGroups(ctx context.Context, input *cloudwatchlo
 func (mc *mockClient) FilterLogEvents(ctx context.Context, input *cloudwatchlogs.FilterLogEventsInput, opts ...func(options *cloudwatchlogs.Options)) (*cloudwatchlogs.FilterLogEventsOutput, error) {
 	args := mc.Called(ctx, input, opts)
 	return args.Get(0).(*cloudwatchlogs.FilterLogEventsOutput), args.Error(1)
+}
+
+func TestEnsureSessionWithCredentials(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	cfg.Region = "us-west-2"
+	cfg.Credentials = configoptional.Some(CredentialsConfig{
+		AccessKeyID:     "AKID",
+		SecretAccessKey: "SECRET",
+	})
+
+	rcvr := newLogsReceiver(cfg, receiver.Settings{
+		TelemetrySettings: component.TelemetrySettings{
+			Logger: zap.NewNop(),
+		},
+	}, consumertest.NewNop())
+	require.NoError(t, rcvr.ensureSession())
+	require.NotNil(t, rcvr.client)
 }

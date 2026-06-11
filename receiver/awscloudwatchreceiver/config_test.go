@@ -544,3 +544,153 @@ func TestValidateMetricsConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateCredentials(t *testing.T) {
+	withCredentials := func(profile string, creds CredentialsConfig) Config {
+		return Config{
+			Region:  "us-west-2",
+			Profile: profile,
+			Logs: LogsConfig{
+				MaxEventsPerRequest: defaultEventLimit,
+				PollInterval:        defaultPollInterval,
+			},
+			Credentials: configoptional.Some(creds),
+		}
+	}
+
+	cases := []struct {
+		name        string
+		config      Config
+		expectedErr error
+	}{
+		{
+			name: "static keys",
+			config: withCredentials("", CredentialsConfig{
+				AccessKeyID:     "AKID",
+				SecretAccessKey: "SECRET",
+			}),
+		},
+		{
+			name: "static keys with session token",
+			config: withCredentials("", CredentialsConfig{
+				AccessKeyID:     "AKID",
+				SecretAccessKey: "SECRET",
+				SessionToken:    "TOKEN",
+			}),
+		},
+		{
+			name: "role only",
+			config: withCredentials("", CredentialsConfig{
+				RoleARN: "arn:aws:iam::123456789012:role/monitoring",
+			}),
+		},
+		{
+			name: "static keys with role and external id",
+			config: withCredentials("", CredentialsConfig{
+				AccessKeyID:     "AKID",
+				SecretAccessKey: "SECRET",
+				RoleARN:         "arn:aws:iam::123456789012:role/monitoring",
+				ExternalID:      "my-external-id",
+			}),
+		},
+		{
+			name: "profile with role",
+			config: withCredentials("my-profile", CredentialsConfig{
+				RoleARN: "arn:aws:iam::123456789012:role/monitoring",
+			}),
+		},
+		{
+			name:        "empty credentials block",
+			config:      withCredentials("", CredentialsConfig{}),
+			expectedErr: errEmptyCredentials,
+		},
+		{
+			name: "access key without secret",
+			config: withCredentials("", CredentialsConfig{
+				AccessKeyID: "AKID",
+			}),
+			expectedErr: errIncompleteStaticCredentials,
+		},
+		{
+			name: "secret without access key",
+			config: withCredentials("", CredentialsConfig{
+				SecretAccessKey: "SECRET",
+			}),
+			expectedErr: errIncompleteStaticCredentials,
+		},
+		{
+			name: "session token without static keys",
+			config: withCredentials("", CredentialsConfig{
+				SessionToken: "TOKEN",
+			}),
+			expectedErr: errSessionTokenWithoutKeys,
+		},
+		{
+			name: "external id without role",
+			config: withCredentials("", CredentialsConfig{
+				AccessKeyID:     "AKID",
+				SecretAccessKey: "SECRET",
+				ExternalID:      "my-external-id",
+			}),
+			expectedErr: errExternalIDWithoutRoleARN,
+		},
+		{
+			name: "profile with static keys",
+			config: withCredentials("my-profile", CredentialsConfig{
+				AccessKeyID:     "AKID",
+				SecretAccessKey: "SECRET",
+			}),
+			expectedErr: errProfileWithStaticCredentials,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.config.Validate()
+			if tc.expectedErr != nil {
+				require.ErrorContains(t, err, tc.expectedErr.Error())
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestLoadCredentialsConfig(t *testing.T) {
+	cm, err := confmaptest.LoadConf(filepath.Join("testdata", "config.yaml"))
+	require.NoError(t, err)
+
+	cases := []struct {
+		name     string
+		expected configoptional.Optional[CredentialsConfig]
+	}{
+		{
+			name: "credentials-static",
+			expected: configoptional.Some(CredentialsConfig{
+				AccessKeyID:     "AKIAIOSFODNN7EXAMPLE",
+				SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+				SessionToken:    "SESSIONTOKEN",
+			}),
+		},
+		{
+			name: "credentials-role",
+			expected: configoptional.Some(CredentialsConfig{
+				RoleARN:    "arn:aws:iam::123456789012:role/monitoring",
+				ExternalID: "my-external-id",
+			}),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			factory := NewFactory()
+			cfg := factory.CreateDefaultConfig()
+
+			loaded, err := cm.Sub(component.NewIDWithName(metadata.Type, tc.name).String())
+			require.NoError(t, err)
+			require.NoError(t, loaded.Unmarshal(cfg))
+			require.Equal(t, tc.expected, cfg.(*Config).Credentials)
+			require.NoError(t, xconfmap.Validate(cfg))
+		})
+	}
+}

@@ -20,7 +20,7 @@ the [AWS SDK for Cloudwatch Logs](https://docs.aws.amazon.com/sdk-for-go/api/ser
 
 ## Getting Started
 
-This receiver uses the [AWS SDK](https://docs.aws.amazon.com/sdk-for-go/v1/developer-guide/configuring-sdk.html) as mode of authentication, which includes [Credentials File](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html) and [IMDS](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-metadata.html) authentication for EC2 instances.
+By default this receiver uses the [AWS SDK default credential chain](https://docs.aws.amazon.com/sdk-for-go/v1/developer-guide/configuring-sdk.html) for authentication, which includes environment variables, the [Credentials File](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html), and [IMDS](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-metadata.html) authentication for EC2 instances. Static credentials and STS role assumption can be configured instead via the `credentials` block; see [Authentication](#authentication).
 
 ## Configuration
 
@@ -34,6 +34,31 @@ This receiver uses the [AWS SDK](https://docs.aws.amazon.com/sdk-for-go/v1/devel
 | `logs`          | *optional* | `Logs`    | Configuration for logs collection. See [Logs Parameters](#logs-parameters).       |
 | `metrics`       | *optional* | `Metrics` | Configuration for metrics collection via GetMetricData. See [Metrics Parameters](#metrics-parameters-getmetricdata--listmetrics). |
 | `storage`       | *optional* | string    | The ID of a storage extension to be used for state persistence.                   |
+| `credentials`   | *optional* | `Credentials` | Explicit AWS credentials to use instead of the default SDK credential chain. See [Authentication](#authentication). |
+
+### Authentication
+
+When the `credentials` block is omitted, the default SDK credential chain is used (environment variables, shared config/credentials files, EC2/ECS instance roles, EKS IRSA, ...), optionally narrowed by `profile`.
+
+| Parameter           | Type   | Description |
+| ------------------- | ------ | ----------- |
+| `access_key_id`     | String | Static AWS access key ID. Must be set together with `secret_access_key`. Mutually exclusive with `profile`. |
+| `secret_access_key` | String | Static AWS secret access key. Must be set together with `access_key_id`. |
+| `session_token`     | String | Session token for temporary static credentials. Requires `access_key_id` and `secret_access_key`. |
+| `role_arn`          | String | ARN of an IAM role to assume via STS. |
+| `external_id`       | String | External ID passed in the AssumeRole call. Requires `role_arn`. |
+
+Static credentials and role assumption compose: when both are set, the static credentials are used as the base identity to assume the role. When only `role_arn` is set, the default credential chain provides the base identity. Example for cross-account collection:
+
+```yaml
+awscloudwatch:
+  region: us-west-2
+  credentials:
+    access_key_id: ${env:AWS_ACCESS_KEY_ID}
+    secret_access_key: ${env:AWS_SECRET_ACCESS_KEY}
+    role_arn: arn:aws:iam::123456789012:role/monitoring
+    external_id: my-external-id
+```
 
 ### Logs Parameters
 

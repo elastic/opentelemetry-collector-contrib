@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/config/configopaque"
 	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/confmap"
 	"go.opentelemetry.io/collector/scraper/scraperhelper"
@@ -27,12 +28,33 @@ var (
 
 // Config is the overall config structure for the awscloudwatchreceiver
 type Config struct {
-	Region       string        `mapstructure:"region"`
-	Profile      string        `mapstructure:"profile"`
-	IMDSEndpoint string        `mapstructure:"imds_endpoint"`
-	Logs         LogsConfig    `mapstructure:"logs"`
-	Metrics      MetricsConfig `mapstructure:"metrics"`
-	StorageID    *component.ID `mapstructure:"storage"`
+	Region       string                                     `mapstructure:"region"`
+	Profile      string                                     `mapstructure:"profile"`
+	IMDSEndpoint string                                     `mapstructure:"imds_endpoint"`
+	Logs         LogsConfig                                 `mapstructure:"logs"`
+	Metrics      MetricsConfig                              `mapstructure:"metrics"`
+	StorageID    *component.ID                              `mapstructure:"storage"`
+	Credentials  configoptional.Optional[CredentialsConfig] `mapstructure:"credentials"`
+}
+
+// CredentialsConfig configures the AWS credentials used to call the CloudWatch APIs.
+// When absent, the default SDK credential chain is used (environment variables, shared
+// config/credentials files, EC2/ECS roles, IRSA, ...).
+//
+// Static credentials (access_key_id/secret_access_key/session_token) and role assumption
+// (role_arn/external_id) compose: when both are set, the static credentials are used as the
+// base identity to assume the role. When only role_arn is set, the default chain provides
+// the base identity.
+type CredentialsConfig struct {
+	// AccessKeyID and SecretAccessKey are static AWS credentials. They must be set together.
+	AccessKeyID     string              `mapstructure:"access_key_id"`
+	SecretAccessKey configopaque.String `mapstructure:"secret_access_key"`
+	// SessionToken is the token for temporary static credentials, if used.
+	SessionToken configopaque.String `mapstructure:"session_token"`
+	// RoleARN is the ARN of an IAM role to assume via STS.
+	RoleARN string `mapstructure:"role_arn"`
+	// ExternalID is the external ID to pass in the AssumeRole call. Requires RoleARN.
+	ExternalID string `mapstructure:"external_id"`
 }
 
 // MetricsConfig is the configuration for the metrics (GetMetricData) portion of this receiver.
@@ -127,6 +149,11 @@ var (
 	errInvalidDiscoveryLimit            = errors.New("metrics discovery limit must be greater than 0")
 	errEmptyStatName                    = errors.New("stat name must not be empty")
 	errCollectionIntervalLessThanPeriod = errors.New("metrics collection_interval must be greater than or equal to period")
+	errEmptyCredentials                 = errors.New("credentials is set but empty; set static credentials and/or role_arn, or remove the block to use the default credential chain")
+	errIncompleteStaticCredentials      = errors.New("access_key_id and secret_access_key must be set together")
+	errSessionTokenWithoutKeys          = errors.New("session_token requires access_key_id and secret_access_key")
+	errExternalIDWithoutRoleARN         = errors.New("external_id requires role_arn")
+	errProfileWithStaticCredentials     = errors.New("profile and static credentials (access_key_id/secret_access_key) are mutually exclusive")
 )
 
 // Validate overrides the embedded ControllerConfig.Validate so that a zero CollectionInterval
@@ -153,9 +180,35 @@ func (c *Config) Validate() error {
 	}
 
 	var errs error
+	errs = errors.Join(errs, c.validateCredentials())
 	errs = errors.Join(errs, c.validateLogsConfig())
 	errs = errors.Join(errs, c.validateMetricsConfig())
 	return errs
+}
+
+func (c *Config) validateCredentials() error {
+	creds := c.Credentials.Get()
+	if creds == nil {
+		return nil
+	}
+	hasKeyID := creds.AccessKeyID != ""
+	hasSecret := creds.SecretAccessKey != ""
+	if !hasKeyID && !hasSecret && creds.SessionToken == "" && creds.RoleARN == "" && creds.ExternalID == "" {
+		return errEmptyCredentials
+	}
+	if hasKeyID != hasSecret {
+		return errIncompleteStaticCredentials
+	}
+	if creds.SessionToken != "" && !hasKeyID {
+		return errSessionTokenWithoutKeys
+	}
+	if creds.ExternalID != "" && creds.RoleARN == "" {
+		return errExternalIDWithoutRoleARN
+	}
+	if hasKeyID && c.Profile != "" {
+		return errProfileWithStaticCredentials
+	}
+	return nil
 }
 
 func (c *Config) validateMetricsDurations() error {

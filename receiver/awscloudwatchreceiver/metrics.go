@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatch"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatch/types"
 	"go.opentelemetry.io/collector/component"
@@ -77,14 +76,7 @@ func newCloudWatchMetricsScraper(cfg *Config, settings receiver.Settings) *cloud
 
 func (s *cloudWatchMetricsScraper) start(ctx context.Context, _ component.Host) error {
 	s.settings.Logger.Debug("initializing CloudWatch client", zap.String("region", s.cfg.Region))
-	opts := []func(*config.LoadOptions) error{config.WithRegion(s.cfg.Region)}
-	if s.cfg.IMDSEndpoint != "" {
-		opts = append(opts, config.WithEC2IMDSEndpoint(s.cfg.IMDSEndpoint))
-	}
-	if s.cfg.Profile != "" {
-		opts = append(opts, config.WithSharedConfigProfile(s.cfg.Profile))
-	}
-	cfg, err := config.LoadDefaultConfig(ctx, opts...)
+	cfg, err := loadAWSConfig(ctx, s.cfg)
 	if err != nil {
 		return err
 	}
