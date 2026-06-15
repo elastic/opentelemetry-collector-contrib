@@ -15,8 +15,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// fakeAuthExtension stands in for the awsauth extension; the receiver matches it
-// structurally via the awsCredentialsProvider interface.
+// fakeAuthExtension stands in for the awscredentialsprovider extension; the receiver
+// matches it structurally via the awsCredentialsProvider interface.
 type fakeAuthExtension struct {
 	component.StartFunc
 	component.ShutdownFunc
@@ -33,7 +33,7 @@ type fakeHost struct {
 func (h *fakeHost) GetExtensions() map[component.ID]component.Component { return h.extensions }
 
 func TestResolveAuthExtension(t *testing.T) {
-	authID := component.MustNewID("awsauth")
+	authID := component.MustNewID("awscredentialsprovider")
 	staticCreds := credentials.NewStaticCredentialsProvider("AKID", "SECRET", "TOKEN")
 	host := &fakeHost{extensions: map[component.ID]component.Component{
 		authID: &fakeAuthExtension{creds: staticCreds},
@@ -75,7 +75,7 @@ type fakeNonAuthExtension struct {
 }
 
 func TestMetricsScraperUsesAuthExtension(t *testing.T) {
-	authID := component.MustNewID("awsauth")
+	authID := component.MustNewID("awscredentialsprovider")
 	host := &fakeHost{extensions: map[component.ID]component.Component{
 		authID: &fakeAuthExtension{creds: credentials.NewStaticCredentialsProvider("AKID", "SECRET", "")},
 	}}
@@ -92,7 +92,7 @@ func TestMetricsScraperUsesAuthExtension(t *testing.T) {
 }
 
 func TestLogsReceiverUsesAuthExtension(t *testing.T) {
-	authID := component.MustNewID("awsauth")
+	authID := component.MustNewID("awscredentialsprovider")
 	host := &fakeHost{extensions: map[component.ID]component.Component{
 		authID: &fakeAuthExtension{creds: credentials.NewStaticCredentialsProvider("AKID", "SECRET", "")},
 	}}

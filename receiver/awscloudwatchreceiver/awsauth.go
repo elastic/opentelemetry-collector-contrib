@@ -10,8 +10,8 @@ import (
 	"go.opentelemetry.io/collector/component"
 )
 
-// awsCredentialsProvider is implemented by the awsauth extension. It is declared
-// locally (structural typing) to avoid a module dependency on the extension.
+// awsCredentialsProvider is implemented by the awscredentialsprovider extension. It is
+// declared locally (structural typing) to avoid a module dependency on the extension.
 type awsCredentialsProvider interface {
 	GetCredentialsProvider() aws.CredentialsProvider
 }

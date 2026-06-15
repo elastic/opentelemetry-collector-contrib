@@ -33,7 +33,7 @@ type Config struct {
 	Logs         LogsConfig    `mapstructure:"logs"`
 	Metrics      MetricsConfig `mapstructure:"metrics"`
 	StorageID    *component.ID `mapstructure:"storage"`
-	// Auth optionally references an awsauth extension by component ID. When set, the
+	// Auth optionally references an awscredentialsprovider extension by component ID. When set, the
 	// extension's resolved credentials are used for the CloudWatch clients instead of
 	// the default SDK credential chain.
 	Auth *component.ID `mapstructure:"auth"`
