@@ -16,15 +16,15 @@ type awsCredentialsProvider interface {
 	GetCredentialsProvider() aws.CredentialsProvider
 }
 
-// resolveAuthExtension returns the credentials provider from the auth extension
-// referenced by id, or nil when no auth extension is configured.
-func resolveAuthExtension(host component.Host, id *component.ID) (aws.CredentialsProvider, error) {
+// resolveCredentialsProvider returns the credentials provider from the
+// awscredentialsprovider extension referenced by id, or nil when none is configured.
+func resolveCredentialsProvider(host component.Host, id *component.ID) (aws.CredentialsProvider, error) {
 	if id == nil {
 		return nil, nil
 	}
 	ext, ok := host.GetExtensions()[*id]
 	if !ok {
-		return nil, fmt.Errorf("unknown auth extension %q", id)
+		return nil, fmt.Errorf("unknown credentials_provider extension %q", id)
 	}
 	provider, ok := ext.(awsCredentialsProvider)
 	if !ok {

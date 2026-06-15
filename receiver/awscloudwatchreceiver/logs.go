@@ -34,7 +34,7 @@ type logsReceiver struct {
 	region                        string
 	profile                       string
 	imdsEndpoint                  string
-	authID                        *component.ID
+	credentialsProviderID         *component.ID
 	credsProvider                 aws.CredentialsProvider
 	pollInterval                  time.Duration
 	maxEventsPerRequest           int
@@ -139,26 +139,26 @@ func newLogsReceiver(cfg *Config, settings receiver.Settings, consumer consumer.
 	}
 
 	return &logsReceiver{
-		settings:            settings,
-		region:              cfg.Region,
-		profile:             cfg.Profile,
-		consumer:            consumer,
-		maxEventsPerRequest: cfg.Logs.MaxEventsPerRequest,
-		imdsEndpoint:        cfg.IMDSEndpoint,
-		authID:              cfg.Auth,
-		autodiscover:        autodiscover,
-		pollInterval:        cfg.Logs.PollInterval,
-		initialStartTime:    startTime,
-		groupNextStartTimes: map[string]time.Time{},
-		groupRequests:       groups,
-		wg:                  &sync.WaitGroup{},
-		doneChan:            make(chan bool),
-		storageID:           cfg.StorageID,
+		settings:              settings,
+		region:                cfg.Region,
+		profile:               cfg.Profile,
+		consumer:              consumer,
+		maxEventsPerRequest:   cfg.Logs.MaxEventsPerRequest,
+		imdsEndpoint:          cfg.IMDSEndpoint,
+		credentialsProviderID: cfg.CredentialsProvider,
+		autodiscover:          autodiscover,
+		pollInterval:          cfg.Logs.PollInterval,
+		initialStartTime:      startTime,
+		groupNextStartTimes:   map[string]time.Time{},
+		groupRequests:         groups,
+		wg:                    &sync.WaitGroup{},
+		doneChan:              make(chan bool),
+		storageID:             cfg.StorageID,
 	}
 }
 
 func (l *logsReceiver) Start(ctx context.Context, host component.Host) error {
-	creds, err := resolveAuthExtension(host, l.authID)
+	creds, err := resolveCredentialsProvider(host, l.credentialsProviderID)
 	if err != nil {
 		return err
 	}

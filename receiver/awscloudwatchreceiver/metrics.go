@@ -88,7 +88,7 @@ func (s *cloudWatchMetricsScraper) start(ctx context.Context, host component.Hos
 	if err != nil {
 		return err
 	}
-	creds, err := resolveAuthExtension(host, s.cfg.Auth)
+	creds, err := resolveCredentialsProvider(host, s.cfg.CredentialsProvider)
 	if err != nil {
 		return err
 	}

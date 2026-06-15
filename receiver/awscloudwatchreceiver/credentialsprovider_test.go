@@ -15,15 +15,17 @@ import (
 	"go.uber.org/zap"
 )
 
-// fakeAuthExtension stands in for the awscredentialsprovider extension; the receiver
-// matches it structurally via the awsCredentialsProvider interface.
-type fakeAuthExtension struct {
+// fakeCredentialsProvider stands in for the awscredentialsprovider extension; the
+// receiver matches it structurally via the awsCredentialsProvider interface.
+type fakeCredentialsProvider struct {
 	component.StartFunc
 	component.ShutdownFunc
 	creds aws.CredentialsProvider
 }
 
-func (f *fakeAuthExtension) GetCredentialsProvider() aws.CredentialsProvider { return f.creds }
+func (f *fakeCredentialsProvider) GetCredentialsProvider() aws.CredentialsProvider {
+	return f.creds
+}
 
 // fakeHost serves extensions to components during Start.
 type fakeHost struct {
@@ -32,21 +34,21 @@ type fakeHost struct {
 
 func (h *fakeHost) GetExtensions() map[component.ID]component.Component { return h.extensions }
 
-func TestResolveAuthExtension(t *testing.T) {
-	authID := component.MustNewID("awscredentialsprovider")
+func TestResolveCredentialsProvider(t *testing.T) {
+	provID := component.MustNewID("awscredentialsprovider")
 	staticCreds := credentials.NewStaticCredentialsProvider("AKID", "SECRET", "TOKEN")
 	host := &fakeHost{extensions: map[component.ID]component.Component{
-		authID: &fakeAuthExtension{creds: staticCreds},
+		provID: &fakeCredentialsProvider{creds: staticCreds},
 	}}
 
-	t.Run("no auth configured", func(t *testing.T) {
-		creds, err := resolveAuthExtension(host, nil)
+	t.Run("none configured", func(t *testing.T) {
+		creds, err := resolveCredentialsProvider(host, nil)
 		require.NoError(t, err)
 		require.Nil(t, creds)
 	})
 
 	t.Run("resolves provider", func(t *testing.T) {
-		creds, err := resolveAuthExtension(host, &authID)
+		creds, err := resolveCredentialsProvider(host, &provID)
 		require.NoError(t, err)
 		retrieved, err := creds.Retrieve(t.Context())
 		require.NoError(t, err)
@@ -55,34 +57,34 @@ func TestResolveAuthExtension(t *testing.T) {
 
 	t.Run("unknown extension", func(t *testing.T) {
 		unknown := component.MustNewID("missing")
-		_, err := resolveAuthExtension(host, &unknown)
-		require.ErrorContains(t, err, "unknown auth extension")
+		_, err := resolveCredentialsProvider(host, &unknown)
+		require.ErrorContains(t, err, "unknown credentials_provider extension")
 	})
 
 	t.Run("extension without provider interface", func(t *testing.T) {
-		wrongID := component.MustNewID("notauth")
+		wrongID := component.MustNewID("other")
 		wrongHost := &fakeHost{extensions: map[component.ID]component.Component{
-			wrongID: &fakeNonAuthExtension{},
+			wrongID: &fakeOtherExtension{},
 		}}
-		_, err := resolveAuthExtension(wrongHost, &wrongID)
+		_, err := resolveCredentialsProvider(wrongHost, &wrongID)
 		require.ErrorContains(t, err, "does not provide AWS credentials")
 	})
 }
 
-type fakeNonAuthExtension struct {
+type fakeOtherExtension struct {
 	component.StartFunc
 	component.ShutdownFunc
 }
 
-func TestMetricsScraperUsesAuthExtension(t *testing.T) {
-	authID := component.MustNewID("awscredentialsprovider")
+func TestMetricsScraperUsesCredentialsProvider(t *testing.T) {
+	provID := component.MustNewID("awscredentialsprovider")
 	host := &fakeHost{extensions: map[component.ID]component.Component{
-		authID: &fakeAuthExtension{creds: credentials.NewStaticCredentialsProvider("AKID", "SECRET", "")},
+		provID: &fakeCredentialsProvider{creds: credentials.NewStaticCredentialsProvider("AKID", "SECRET", "")},
 	}}
 
 	cfg := createDefaultConfig().(*Config)
 	cfg.Region = "us-west-2"
-	cfg.Auth = &authID
+	cfg.CredentialsProvider = &provID
 
 	scraper := newCloudWatchMetricsScraper(cfg, receiver.Settings{
 		TelemetrySettings: component.TelemetrySettings{Logger: zap.NewNop()},
@@ -91,15 +93,15 @@ func TestMetricsScraperUsesAuthExtension(t *testing.T) {
 	require.NotNil(t, scraper.client)
 }
 
-func TestLogsReceiverUsesAuthExtension(t *testing.T) {
-	authID := component.MustNewID("awscredentialsprovider")
+func TestLogsReceiverUsesCredentialsProvider(t *testing.T) {
+	provID := component.MustNewID("awscredentialsprovider")
 	host := &fakeHost{extensions: map[component.ID]component.Component{
-		authID: &fakeAuthExtension{creds: credentials.NewStaticCredentialsProvider("AKID", "SECRET", "")},
+		provID: &fakeCredentialsProvider{creds: credentials.NewStaticCredentialsProvider("AKID", "SECRET", "")},
 	}}
 
 	cfg := createDefaultConfig().(*Config)
 	cfg.Region = "us-west-2"
-	cfg.Auth = &authID
+	cfg.CredentialsProvider = &provID
 	cfg.Logs.Groups.AutodiscoverConfig = nil
 
 	rcvr := newLogsReceiver(cfg, receiver.Settings{
