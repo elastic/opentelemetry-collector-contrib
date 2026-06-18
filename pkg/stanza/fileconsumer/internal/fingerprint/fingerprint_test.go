@@ -338,3 +338,57 @@ func TestCompressionFingerprint(t *testing.T) {
 	uncompressedFP := New(data)
 	uncompressedFP.Equal(compressedFP)
 }
+
+func TestFingerprint_Bytes(t *testing.T) {
+	data := []byte("hello world fingerprint")
+	fp := New(data)
+
+	got := fp.Bytes()
+	require.Equal(t, data, got)
+
+	// Verify Bytes returns a copy (not the internal slice)
+	got2 := fp.Bytes()
+	require.NotSame(t, &got[0], &got2[0],
+		"Bytes() should return a new copy on each call")
+
+	// Verify mutating the returned slice does not affect the fingerprint
+	got[0] = 0xFF
+	require.Equal(t, data, fp.Bytes(),
+		"mutating returned slice must not affect the fingerprint")
+}
+
+func TestFingerprint_Bytes_Empty(t *testing.T) {
+	fp := New([]byte{})
+	got := fp.Bytes()
+	require.Empty(t, got)
+}
+
+func TestFingerprintKeyCaching(t *testing.T) {
+	data := []byte("test fingerprint data")
+	fp := New(data)
+
+	key1 := fp.Key()
+	require.Equal(t, string(data), key1)
+
+	key2 := fp.Key()
+	require.Equal(t, key1, key2)
+	require.NotEmpty(t, fp.key)
+}
+
+func TestFingerprintCopyDoesNotShareKey(t *testing.T) {
+	original := New([]byte("original data"))
+	originalKey := original.Key()
+	require.NotEmpty(t, originalKey)
+
+	copied := original.Copy()
+	require.Empty(t, copied.key)
+	require.Equal(t, originalKey, copied.Key())
+}
+
+func TestFingerprintKeyWithNilOrEmpty(t *testing.T) {
+	var nilFP *Fingerprint
+	require.Empty(t, nilFP.Key())
+
+	emptyFP := New([]byte{})
+	require.Empty(t, emptyFP.Key())
+}

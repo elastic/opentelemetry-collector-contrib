@@ -53,7 +53,6 @@ func TestLoadConfig(t *testing.T) {
 	assert.Equal(t, "demo", r1.PrometheusConfig.ScrapeConfigs[0].JobName)
 	assert.Equal(t, 5*time.Second, time.Duration(r1.PrometheusConfig.ScrapeConfigs[0].ScrapeInterval))
 	assert.True(t, r1.TrimMetricSuffixes)
-	assert.True(t, r1.ReportExtraScrapeMetrics)
 
 	ta := r1.TargetAllocator.Get()
 	assert.Equal(t, "http://my-targetallocator-service", ta.Endpoint)
@@ -115,6 +114,57 @@ func TestLoadTargetAllocatorConfig(t *testing.T) {
 	assert.Len(t, r2.PrometheusConfig.ScrapeConfigs, 1)
 	assert.Equal(t, "demo", r2.PrometheusConfig.ScrapeConfigs[0].JobName)
 	assert.Equal(t, promModel.Duration(5*time.Second), r2.PrometheusConfig.ScrapeConfigs[0].ScrapeInterval)
+}
+
+func TestLoadScrapeOptionsConfig(t *testing.T) {
+	cm, err := confmaptest.LoadConf(filepath.Join("testdata", "config_scrape_options.yaml"))
+	require.NoError(t, err)
+	factory := NewFactory()
+
+	tests := []struct {
+		name     string
+		validate func(*testing.T, *Config)
+	}{
+		{
+			name: "default",
+			validate: func(t *testing.T, r *Config) {
+				assert.False(t, r.ScrapeOnShutdown)
+				assert.False(t, r.DiscoveryReloadOnStartup)
+				assert.Zero(t, r.InitialScrapeOffset)
+			},
+		},
+		{
+			name: "scrape_on_shutdown",
+			validate: func(t *testing.T, r *Config) {
+				assert.True(t, r.ScrapeOnShutdown)
+			},
+		},
+		{
+			name: "discovery_reload_on_startup",
+			validate: func(t *testing.T, r *Config) {
+				assert.True(t, r.DiscoveryReloadOnStartup)
+			},
+		},
+		{
+			name: "initial_scrape_offset",
+			validate: func(t *testing.T, r *Config) {
+				assert.Equal(t, 10*time.Second, r.InitialScrapeOffset)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := factory.CreateDefaultConfig()
+			sub, err := cm.Sub(component.NewIDWithName(metadata.Type, tt.name).String())
+			require.NoError(t, err)
+			require.NoError(t, sub.Unmarshal(cfg))
+			require.NoError(t, xconfmap.Validate(cfg))
+
+			r := cfg.(*Config)
+			tt.validate(t, r)
+		})
+	}
 }
 
 func TestValidateConfigWithScrapeConfigFiles(t *testing.T) {
@@ -381,7 +431,7 @@ func TestLoadPrometheusAPIServerExtensionConfig(t *testing.T) {
 	assert.NotNil(t, r0.PrometheusConfig)
 	assert.True(t, r0.APIServer.Enabled)
 	assert.NotNil(t, r0.APIServer.ServerConfig)
-	assert.Equal(t, "localhost:9090", r0.APIServer.ServerConfig.Endpoint)
+	assert.Equal(t, "localhost:9090", r0.APIServer.ServerConfig.NetAddr.Endpoint)
 
 	sub, err = cm.Sub(component.NewIDWithName(metadata.Type, "withAPIDisabled").String())
 	require.NoError(t, err)

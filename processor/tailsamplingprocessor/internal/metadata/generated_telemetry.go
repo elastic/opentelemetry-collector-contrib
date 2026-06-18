@@ -25,6 +25,7 @@ type TelemetryBuilder struct {
 	meter                                               metric.Meter
 	mu                                                  sync.Mutex
 	registrations                                       []metric.Registration
+	ProcessorTailSamplingCountBytesSampled              metric.Int64Counter
 	ProcessorTailSamplingCountSpansSampled              metric.Int64Counter
 	ProcessorTailSamplingCountTracesSampled             metric.Int64Counter
 	ProcessorTailSamplingEarlyReleasesFromCacheDecision metric.Int64Counter
@@ -38,6 +39,7 @@ type TelemetryBuilder struct {
 	ProcessorTailSamplingSamplingTraceDroppedTooEarly   metric.Int64Counter
 	ProcessorTailSamplingSamplingTraceRemovalAge        metric.Int64Histogram
 	ProcessorTailSamplingSamplingTracesOnMemory         metric.Int64Gauge
+	ProcessorTailSamplingTracesDroppedTooLarge          metric.Int64Counter
 }
 
 // TelemetryBuilderOption applies changes to default builder.
@@ -69,6 +71,12 @@ func NewTelemetryBuilder(settings component.TelemetrySettings, options ...Teleme
 	}
 	builder.meter = Meter(settings)
 	var err, errs error
+	builder.ProcessorTailSamplingCountBytesSampled, err = builder.meter.Int64Counter(
+		"otelcol_processor_tail_sampling_count_bytes_sampled",
+		metric.WithDescription("Count of bytes that were sampled or not per sampling policy [Development]"),
+		metric.WithUnit("By"),
+	)
+	errs = errors.Join(errs, err)
 	builder.ProcessorTailSamplingCountSpansSampled, err = builder.meter.Int64Counter(
 		"otelcol_processor_tail_sampling_count_spans_sampled",
 		metric.WithDescription("Count of spans that were sampled or not per sampling policy [Development]"),
@@ -145,6 +153,12 @@ func NewTelemetryBuilder(settings component.TelemetrySettings, options ...Teleme
 	builder.ProcessorTailSamplingSamplingTracesOnMemory, err = builder.meter.Int64Gauge(
 		"otelcol_processor_tail_sampling_sampling_traces_on_memory",
 		metric.WithDescription("Tracks the number of traces current on memory [Development]"),
+		metric.WithUnit("{traces}"),
+	)
+	errs = errors.Join(errs, err)
+	builder.ProcessorTailSamplingTracesDroppedTooLarge, err = builder.meter.Int64Counter(
+		"otelcol_processor_tail_sampling_traces_dropped_too_large",
+		metric.WithDescription("Count of traces that were dropped because they were too large [Development]"),
 		metric.WithUnit("{traces}"),
 	)
 	errs = errors.Join(errs, err)

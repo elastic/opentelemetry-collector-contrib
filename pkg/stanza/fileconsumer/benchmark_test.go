@@ -158,10 +158,11 @@ func BenchmarkFileInput(b *testing.B) {
 	// to avoid measuring the time it takes to generate them
 	// and to reduce the amount of syscalls in the benchmark.
 	uniqueLines := 10
-	severalLines := ""
+	var severalLinesBuilder strings.Builder
 	for range uniqueLines {
-		severalLines += string(filetest.TokenWithLength(999)) + "\n"
+		severalLinesBuilder.WriteString(string(filetest.TokenWithLength(999)) + "\n")
 	}
+	severalLines := severalLinesBuilder.String()
 
 	for _, bench := range cases {
 		b.Run(bench.name, func(b *testing.B) {
@@ -341,6 +342,50 @@ func BenchmarkConsumeFiles(b *testing.B) {
 	}
 }
 
+func BenchmarkPollManyFiles(b *testing.B) {
+	fileCounts := []int{100, 500, 1000, 2000, 2500, 3000}
+	for _, numFiles := range fileCounts {
+		b.Run(fmt.Sprintf("Files_%d", numFiles), func(b *testing.B) {
+			rootDir := b.TempDir()
+
+			for i := range numFiles {
+				path := filepath.Join(rootDir, fmt.Sprintf("file%04d.log", i))
+				f := filetest.OpenFile(b, path)
+				_, err := f.WriteString(path + "\n")
+				require.NoError(b, err)
+				require.NoError(b, f.Close())
+			}
+
+			cfg := NewConfig()
+			cfg.Include = []string{filepath.Join(rootDir, "*.log")}
+			cfg.StartAt = "beginning"
+			cfg.MaxConcurrentFiles = numFiles * 2
+			cfg.PollInterval = time.Microsecond
+
+			set := componenttest.NewNopTelemetrySettings()
+			callback := func(context.Context, [][]byte, map[string]any, int64, []int64) error {
+				return nil
+			}
+
+			op, err := cfg.Build(set, callback)
+			require.NoError(b, err)
+
+			ctx := b.Context()
+			persister := testutil.NewUnscopedMockPersister()
+			op.instantiateTracker(ctx, persister)
+			op.persister = persister
+
+			op.poll(ctx)
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				op.poll(ctx)
+			}
+		})
+	}
+}
+
 // BenchmarkFingerprintComparison benchmarks fingerprint comparison operations
 // This isolates the cost of fingerprint matching from file I/O
 func BenchmarkFingerprintComparison(b *testing.B) {
@@ -410,11 +455,55 @@ func BenchmarkFilesetMatch(b *testing.B) {
 				fs := fileset.New[*reader.Metadata](size)
 				fs.Add(metadatas...)
 
-				// Measure the Match operation
-				result := fs.Match(targetFp, fileset.Equal)
+				// Measure the indexed exact-match operation.
+				result := fs.MatchEqual(targetFp)
 				if result == nil {
 					b.Fatal("expected to find match")
 				}
+			}
+		})
+	}
+}
+
+// BenchmarkStartLatency measures the time for Manager.Start() to return.
+func BenchmarkStartLatency(b *testing.B) {
+	fileCounts := []int{1000, 10000}
+
+	for _, fileCount := range fileCounts {
+		b.Run(fmt.Sprintf("Files_%d", fileCount), func(b *testing.B) {
+			b.ReportAllocs()
+			rootDir := b.TempDir()
+
+			// Create many log files to simulate production environment
+			for i := range fileCount {
+				path := filepath.Join(rootDir, fmt.Sprintf("app%d.log", i))
+				f := filetest.OpenFile(b, path)
+				// Write some initial content
+				_, err := fmt.Fprintf(f, "Initial log line for file %d\n", i)
+				require.NoError(b, err)
+				require.NoError(b, f.Close())
+			}
+
+			cfg := NewConfig()
+			cfg.Include = []string{filepath.Join(rootDir, "*.log")}
+			cfg.StartAt = "beginning"
+			cfg.PollInterval = 1000 * time.Second
+
+			callback := func(_ context.Context, _ [][]byte, _ map[string]any, _ int64, _ []int64) error {
+				return nil
+			}
+
+			set := componenttest.NewNopTelemetrySettings()
+
+			for b.Loop() {
+				op, err := cfg.Build(set, callback)
+				require.NoError(b, err)
+
+				// This is the call under test. Start() initializes the
+				// manager and kicks off the poller goroutine. We measure
+				// how long it takes to return, which gates readiness.
+				require.NoError(b, op.Start(testutil.NewUnscopedMockPersister()))
+				require.NoError(b, op.Stop())
 			}
 		})
 	}

@@ -79,7 +79,12 @@ type Config struct {
 	// Transport settings used with Domain (supports both gRPC and HTTP)
 	DomainSettings TransportConfig `mapstructure:"domain_settings"`
 
-	// Use AWS PrivateLink for the domain
+	// PrivateLink, when enabled, automatically routes telemetry to the AWS PrivateLink ingress
+	// endpoint (ingress.private.<domain>) for the configured domain. AWS PrivateLink provides
+	// private connectivity between VPCs, supported AWS services, and on-premises networks
+	// without exposing traffic to the public internet. If the domain already contains
+	// "private.", no additional prefix is added. For up-to-date PrivateLink endpoints, see
+	// https://coralogix.com/docs/integrations/aws/aws-privatelink/aws-privatelink/#privatelink-endpoints
 	PrivateLink bool `mapstructure:"private_link"`
 
 	// Coralogix traces ingress endpoint (supports both gRPC and HTTP)
@@ -137,6 +142,8 @@ func (c *Config) Unmarshal(conf *confmap.Conf) error {
 
 	if isEmpty(c.Metrics.Endpoint) {
 		c.Metrics.Endpoint = ensureHTTPScheme(c.DomainSettings.Endpoint)
+	} else if c.Protocol == httpProtocol {
+		c.Metrics.Endpoint = ensureHTTPScheme(c.Metrics.Endpoint)
 	}
 
 	if !isEmpty(c.Domain) && isEmpty(c.Traces.Endpoint) {
@@ -148,6 +155,8 @@ func (c *Config) Unmarshal(conf *confmap.Conf) error {
 
 	if isEmpty(c.Traces.Endpoint) {
 		c.Traces.Endpoint = ensureHTTPScheme(c.DomainSettings.Endpoint)
+	} else if c.Protocol == httpProtocol {
+		c.Traces.Endpoint = ensureHTTPScheme(c.Traces.Endpoint)
 	}
 
 	if !isEmpty(c.Domain) && isEmpty(c.Logs.Endpoint) {
@@ -159,14 +168,23 @@ func (c *Config) Unmarshal(conf *confmap.Conf) error {
 
 	if isEmpty(c.Logs.Endpoint) {
 		c.Logs.Endpoint = ensureHTTPScheme(c.DomainSettings.Endpoint)
+	} else if c.Protocol == httpProtocol {
+		c.Logs.Endpoint = ensureHTTPScheme(c.Logs.Endpoint)
 	}
 
-	if !isEmpty(c.Domain) && isEmpty(c.Profiles.Endpoint) {
+	// Only auto-populate profiles endpoint if protocol is not HTTP (profiles only support gRPC)
+	if c.Protocol != httpProtocol && !isEmpty(c.Domain) && isEmpty(c.Profiles.Endpoint) {
 		tCfg, err := setMergedTransportConfigWithConf(conf, c, &TransportConfig{ClientConfig: c.Profiles})
 		if err != nil {
 			return err
 		}
 		c.Profiles = tCfg.ClientConfig
+	}
+
+	// Only set profiles endpoint fallback if protocol is not HTTP and we have something to fallback to
+	// This avoid validation issues
+	if c.Protocol != httpProtocol && isEmpty(c.Profiles.Endpoint) && !isEmpty(c.DomainSettings.Endpoint) {
+		c.Profiles.Endpoint = ensureHTTPScheme(c.DomainSettings.Endpoint)
 	}
 	return nil
 }

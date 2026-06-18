@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,14 +20,22 @@ import (
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest"
 )
 
 type mockPartitionClient struct {
 	eventData []*azeventhubs.ReceivedEventData
 	closed    bool
+	err       error
+	callCount atomic.Int32
 }
 
 func (p *mockPartitionClient) ReceiveEvents(_ context.Context, maxBatchSize int, _ *azeventhubs.ReceiveEventsOptions) ([]*azeventhubs.ReceivedEventData, error) {
+	callCount := p.callCount.Add(1)
+	if p.err != nil && callCount == 1 {
+		return nil, p.err
+	}
+
 	events := make([]*azeventhubs.ReceivedEventData, 0, maxBatchSize)
 
 	for i := range maxBatchSize {
@@ -52,7 +61,9 @@ type mockAzeventHub struct {
 	partitionProperties azeventhubs.PartitionProperties
 	partitionID         string
 	offset              string
+	prefetch            int32
 	closed              bool
+	partitionClient     *mockPartitionClient
 }
 
 func (a *mockAzeventHub) GetEventHubProperties(_ context.Context, _ *azeventhubs.GetEventHubPropertiesOptions) (azeventhubs.EventHubProperties, error) {
@@ -65,10 +76,15 @@ func (a *mockAzeventHub) GetPartitionProperties(_ context.Context, _ string, _ *
 
 func (a *mockAzeventHub) NewPartitionClient(partitionID string, options *azeventhubs.PartitionClientOptions) (azPartitionClient, error) {
 	a.partitionID = partitionID
-	if options != nil && options.StartPosition.Offset != nil {
-		a.offset = *options.StartPosition.Offset
+	if options != nil {
+		if options.StartPosition.Offset != nil {
+			a.offset = *options.StartPosition.Offset
+		}
+		a.prefetch = options.Prefetch
 	}
-
+	if a.partitionClient != nil {
+		return a.partitionClient, nil
+	}
 	return &mockPartitionClient{}, nil
 }
 
@@ -106,12 +122,13 @@ func TestHubWrapperAzeventhubImpl_GetEventHubProperties(t *testing.T) {
 
 func TestHubWrapperAzeventhubImpl_Receive(t *testing.T) {
 	testCases := []struct {
-		name           string
-		hub            *mockAzeventHub
-		config         *Config
-		applyOffset    bool
-		expectErr      bool
-		expectedOffset string
+		name             string
+		hub              *mockAzeventHub
+		config           *Config
+		applyOffset      bool
+		expectErr        bool
+		expectedOffset   string
+		expectedPrefetch int32
 	}{
 		{
 			name:      "nil hub",
@@ -152,6 +169,35 @@ func TestHubWrapperAzeventhubImpl_Receive(t *testing.T) {
 			applyOffset:    false,
 			expectErr:      false,
 		},
+		{
+			name: "prefetch default (zero passes through to SDK default)",
+			hub:  &mockAzeventHub{},
+			config: &Config{
+				Connection: "Endpoint=sb://test.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=abcd;EntityPath=main",
+				PollRate:   1,
+			},
+			expectedPrefetch: 0,
+		},
+		{
+			name: "prefetch explicit positive",
+			hub:  &mockAzeventHub{},
+			config: &Config{
+				Connection:    "Endpoint=sb://test.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=abcd;EntityPath=main",
+				PollRate:      1,
+				PrefetchCount: 500,
+			},
+			expectedPrefetch: 500,
+		},
+		{
+			name: "prefetch disabled (negative)",
+			hub:  &mockAzeventHub{},
+			config: &Config{
+				Connection:    "Endpoint=sb://test.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=abcd;EntityPath=main",
+				PollRate:      1,
+				PrefetchCount: -1,
+			},
+			expectedPrefetch: -1,
+		},
 	}
 
 	for _, test := range testCases {
@@ -171,6 +217,7 @@ func TestHubWrapperAzeventhubImpl_Receive(t *testing.T) {
 					return nil
 				},
 				test.applyOffset,
+				zaptest.NewLogger(t),
 			)
 			if test.expectErr {
 				require.Error(t, err)
@@ -179,6 +226,7 @@ func TestHubWrapperAzeventhubImpl_Receive(t *testing.T) {
 			}
 
 			require.Equal(t, test.expectedOffset, test.hub.offset)
+			require.Equal(t, test.expectedPrefetch, test.hub.prefetch)
 			require.NoError(t, err)
 			<-listener.Done()
 		})
@@ -260,6 +308,22 @@ func TestPartitionListener_SetErr(t *testing.T) {
 	require.NoError(t, p.err)
 	p.setErr(errors.New("test"))
 	assert.Equal(t, "test", p.err.Error())
+}
+
+func TestReceive_ContinuesAfterError(t *testing.T) {
+	pc := &mockPartitionClient{err: errors.New("receive error")}
+	h := &hubWrapperAzeventhubImpl{
+		hub:    &mockAzeventHub{partitionClient: pc},
+		config: &Config{Connection: "Endpoint=sb://test.servicebus.windows.net/;SharedAccessKeyName=Key;SharedAccessKey=Secret;EntityPath=hub", PollRate: 1},
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+
+	_, err := h.Receive(ctx, "p1", func(_ context.Context, _ *azureEvent) error { return nil }, false, zaptest.NewLogger(t))
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool { return pc.callCount.Load() >= 2 }, 2*time.Second, 50*time.Millisecond)
 }
 
 func TestGetConsumerGroup(t *testing.T) {

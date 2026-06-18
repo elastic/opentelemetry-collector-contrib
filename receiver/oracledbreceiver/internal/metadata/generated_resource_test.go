@@ -14,6 +14,11 @@ func TestResourceBuilder(t *testing.T) {
 			cfg := loadResourceAttributesConfig(t, tt)
 			rb := NewResourceBuilder(cfg)
 			rb.SetHostName("host.name-val")
+			rb.SetOracleDbHostingType("oracle.db.hosting_type-val")
+			rb.SetOracleDbOpenMode("oracle.db.open_mode-val")
+			rb.SetOracleDbPdb("oracle.db.pdb-val")
+			rb.SetOracleDbRole("oracle.db.role-val")
+			rb.SetOracleDbVersion("oracle.db.version-val")
 			rb.SetOracledbInstanceName("oracledb.instance.name-val")
 			rb.SetServiceInstanceID("service.instance.id-val")
 
@@ -22,30 +27,54 @@ func TestResourceBuilder(t *testing.T) {
 
 			switch tt {
 			case "default":
-				assert.Equal(t, 3, res.Attributes().Len())
+				assert.Equal(t, 8, res.Attributes().Len())
 			case "all_set":
-				assert.Equal(t, 3, res.Attributes().Len())
+				assert.Equal(t, 8, res.Attributes().Len())
 			case "none_set":
 				assert.Equal(t, 0, res.Attributes().Len())
 				return
 			default:
 				assert.Failf(t, "unexpected test case: %s", tt)
 			}
-
-			val, ok := res.Attributes().Get("host.name")
+			hostNameAttrVal, ok := res.Attributes().Get("host.name")
 			assert.True(t, ok)
 			if ok {
-				assert.Equal(t, "host.name-val", val.Str())
+				assert.Equal(t, "host.name-val", hostNameAttrVal.Str())
 			}
-			val, ok = res.Attributes().Get("oracledb.instance.name")
+			oracleDbHostingTypeAttrVal, ok := res.Attributes().Get("oracle.db.hosting_type")
 			assert.True(t, ok)
 			if ok {
-				assert.Equal(t, "oracledb.instance.name-val", val.Str())
+				assert.Equal(t, "oracle.db.hosting_type-val", oracleDbHostingTypeAttrVal.Str())
 			}
-			val, ok = res.Attributes().Get("service.instance.id")
+			oracleDbOpenModeAttrVal, ok := res.Attributes().Get("oracle.db.open_mode")
 			assert.True(t, ok)
 			if ok {
-				assert.Equal(t, "service.instance.id-val", val.Str())
+				assert.Equal(t, "oracle.db.open_mode-val", oracleDbOpenModeAttrVal.Str())
+			}
+			oracleDbPdbAttrVal, ok := res.Attributes().Get("oracle.db.pdb")
+			assert.True(t, ok)
+			if ok {
+				assert.Equal(t, "oracle.db.pdb-val", oracleDbPdbAttrVal.Str())
+			}
+			oracleDbRoleAttrVal, ok := res.Attributes().Get("oracle.db.role")
+			assert.True(t, ok)
+			if ok {
+				assert.Equal(t, "oracle.db.role-val", oracleDbRoleAttrVal.Str())
+			}
+			oracleDbVersionAttrVal, ok := res.Attributes().Get("oracle.db.version")
+			assert.True(t, ok)
+			if ok {
+				assert.Equal(t, "oracle.db.version-val", oracleDbVersionAttrVal.Str())
+			}
+			oracledbInstanceNameAttrVal, ok := res.Attributes().Get("oracledb.instance.name")
+			assert.True(t, ok)
+			if ok {
+				assert.Equal(t, "oracledb.instance.name-val", oracledbInstanceNameAttrVal.Str())
+			}
+			serviceInstanceIDAttrVal, ok := res.Attributes().Get("service.instance.id")
+			assert.True(t, ok)
+			if ok {
+				assert.Equal(t, "service.instance.id-val", serviceInstanceIDAttrVal.Str())
 			}
 		})
 	}

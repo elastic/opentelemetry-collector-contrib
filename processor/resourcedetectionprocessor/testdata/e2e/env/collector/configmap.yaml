@@ -6,7 +6,7 @@ metadata:
 data:
   relay: |
     exporters:
-      otlp:
+      otlp_grpc:
         endpoint: {{ .HostEndpoint }}:4317
         tls:
           insecure: true
@@ -14,7 +14,7 @@ data:
       health_check:
         endpoint: 0.0.0.0:13133
     processors:
-      resourcedetection:
+      resource_detection:
         detectors: [env]
         timeout: 2s
         override: false
@@ -34,6 +34,6 @@ data:
           receivers:
             - hostmetrics
           processors:
-            - resourcedetection
+            - resource_detection
           exporters:
-            - otlp
+            - otlp_grpc

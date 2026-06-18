@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"regexp"
 	"strconv"
 	"strings"
 	"text/template"
@@ -19,27 +20,17 @@ import (
 
 	"go.opentelemetry.io/collector/config/confignet"
 	"go.opentelemetry.io/collector/config/configtls"
-	"go.opentelemetry.io/collector/featuregate"
 	"go.opentelemetry.io/otel/propagation"
-	semconv "go.opentelemetry.io/otel/semconv/v1.38.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/multierr"
 	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/sqlquery"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/postgresqlreceiver/internal/metadata"
 )
 
-const (
-	lagMetricsInSecondsFeatureGateID = "postgresqlreceiver.preciselagmetrics"
-	querySampleTraceContextKey       = "_otel_trace_context"
-)
-
-var preciseLagMetricsFg = featuregate.GlobalRegistry().MustRegister(
-	lagMetricsInSecondsFeatureGateID,
-	featuregate.StageBeta,
-	featuregate.WithRegisterDescription("Metric `postgresql.wal.lag` is replaced by more precise `postgresql.wal.delay`."),
-	featuregate.WithRegisterFromVersion("0.89.0"),
-)
+const querySampleTraceContextKey = "_otel_trace_context"
 
 // databaseName is a name that refers to a database so that it can be uniquely referred to later
 // i.e. database1
@@ -85,35 +76,90 @@ type postgreSQLClient struct {
 	closeFn func() error
 }
 
-// explainQuery implements client.
-func (c *postgreSQLClient) explainQuery(query, queryID string, logger *zap.Logger) (string, error) {
-	normalizedQueryID := strings.ReplaceAll(queryID, "-", "_")
-	var queryBuilder strings.Builder
-	var nulls []string
-	counter := 1
+// explainableStatements is a whitelist of SQL statements that PostgreSQL can EXPLAIN.
+var explainableStatements = map[string]struct{}{
+	"SELECT": {},
+	"TABLE":  {}, // TABLE is shorthand for SELECT * FROM
+	"DELETE": {},
+	"INSERT": {},
+	"UPDATE": {},
+	"WITH":   {}, // CTEs
+	"MERGE":  {}, // PostgreSQL 15+
+	"VALUES": {},
+}
 
-	for _, ch := range query {
-		if ch == '?' {
-			queryBuilder.WriteString(fmt.Sprintf("$%d", counter))
-			counter++
-			nulls = append(nulls, "null")
-		} else {
-			queryBuilder.WriteRune(ch)
+// isExplainableQuery checks if a query can be explained by PostgreSQL.
+// Uses a whitelist approach, only allows known DML statements.
+func isExplainableQuery(query string) bool {
+	trimmed := strings.TrimSpace(query)
+
+	// Remove leading comments (both -- and /* */ style)
+	for {
+		switch {
+		case strings.HasPrefix(trimmed, "--"):
+			idx := strings.Index(trimmed, "\n")
+			if idx == -1 {
+				return false
+			}
+			trimmed = strings.TrimSpace(trimmed[idx+1:])
+			continue
+		case strings.HasPrefix(trimmed, "/*"):
+			idx := strings.Index(trimmed, "*/")
+			if idx == -1 {
+				return false
+			}
+			trimmed = strings.TrimSpace(trimmed[idx+2:])
+			continue
 		}
+		break
 	}
 
-	preparedQuery := queryBuilder.String()
+	if trimmed == "" {
+		return false
+	}
 
-	//nolint:errcheck
-	defer c.client.Exec(fmt.Sprintf("/* otel-collector-ignore */ DEALLOCATE PREPARE otel_%s", normalizedQueryID))
+	// Extract and uppercase only the first word to check against the whitelist
+	firstWord := trimmed
+	if idx := strings.IndexAny(trimmed, " \t\n("); idx != -1 {
+		firstWord = trimmed[:idx]
+	}
+
+	_, ok := explainableStatements[strings.ToUpper(firstWord)]
+	return ok
+}
+
+// explainQuery implements client.
+func (c *postgreSQLClient) explainQuery(query, queryID string, logger *zap.Logger) (string, error) {
+	// Check if the query is explainable before attempting EXPLAIN
+	if !isExplainableQuery(query) {
+		logger.Debug("skipping EXPLAIN for non-explainable query", zap.String("queryID", queryID))
+		return "", nil
+	}
+
+	normalizedQueryID := strings.ReplaceAll(queryID, "-", "_")
+
+	// PostgreSQL's pg_stat_statements returns queries with $1, $2 placeholders
+	paramRegex := regexp.MustCompile(`\$\d+`)
+	matches := paramRegex.FindAllString(query, -1)
+
+	// Build nulls array for placeholders
+	nulls := make([]string, len(matches))
+	for i := range nulls {
+		nulls[i] = "null"
+	}
+
+	defer func() {
+		_, _ = c.client.Exec(fmt.Sprintf("/* otel-collector-ignore */ DEALLOCATE PREPARE otel_%s", normalizedQueryID))
+	}()
 
 	// if there is no parameter needed, we can not put an empty bracket
+
 	nullsString := ""
 	if len(nulls) > 0 {
 		nullsString = "(" + strings.Join(nulls, ", ") + ")"
 	}
 	setPlanCacheMode := "/* otel-collector-ignore */ SET plan_cache_mode = force_generic_plan;"
-	prepareStatement := fmt.Sprintf("PREPARE otel_%s AS %s;", normalizedQueryID, preparedQuery)
+	prepareStatement := fmt.Sprintf("PREPARE otel_%s AS %s;", normalizedQueryID, query)
 	explainStatement := fmt.Sprintf("EXPLAIN(FORMAT JSON) EXECUTE otel_%s%s;", normalizedQueryID, nullsString)
 
 	wrappedDb := sqlquery.NewDbClient(sqlquery.DbWrapper{Db: c.client}, setPlanCacheMode+prepareStatement+explainStatement, logger, sqlquery.TelemetryConfig{})
@@ -123,7 +169,14 @@ func (c *postgreSQLClient) explainQuery(query, queryID string, logger *zap.Logge
 		logger.Error("failed to explain statement", zap.Error(err))
 		return "", err
 	}
-	return obfuscateSQLExecPlan(result[0]["QUERY PLAN"])
+
+	plan, err := obfuscateSQLExecPlan(result[0]["QUERY PLAN"])
+	if err != nil {
+		logger.Error("failed to obfuscate explain plan", zap.Error(err), zap.String("queryID", queryID))
+		return "", err
+	}
+
+	return plan, nil
 }
 
 var _ client = (*postgreSQLClient)(nil)
@@ -727,7 +780,7 @@ func (c *postgreSQLClient) getDeprecatedReplicationStats(ctx context.Context) ([
 }
 
 func (c *postgreSQLClient) getReplicationStats(ctx context.Context) ([]replicationStats, error) {
-	if !preciseLagMetricsFg.IsEnabled() {
+	if !metadata.PostgresqlreceiverPreciselagmetricsFeatureGate.IsEnabled() {
 		return c.getDeprecatedReplicationStats(ctx)
 	}
 
@@ -1052,29 +1105,34 @@ func (c *postgreSQLClient) getTopQuery(ctx context.Context, limit int64, logger 
 			tempBlksWrittenColumnName:   convertToInt,
 			totalExecTimeColumnName:     convertMillisecondToSecond,
 			totalPlanTimeColumnName:     convertMillisecondToSecond,
-			"query": func(_, val string, logger *zap.Logger) (any, error) {
-				// TODO: check if it is truncated.
-				result, err := obfuscateSQL(val)
-				if err != nil {
-					logger.Error("failed to obfuscate query", zap.String("query", val))
-					return "", err
-				}
-				return result, nil
-			},
 		}
 		currentAttributes := make(map[string]any)
+
+		// Store raw query before obfuscation (needed for EXPLAIN with $N placeholders)
+		if rawQuery, ok := row["query"]; ok {
+			currentAttributes[dbAttributePrefix+"raw_query"] = rawQuery
+		}
 
 		for col := range row {
 			var val any
 			var err error
 			converter, ok := needConversion[col]
-			if ok {
+			switch {
+			case ok:
 				val, err = converter(col, row[col], logger)
 				if err != nil {
 					logger.Warn("failed to convert column to int", zap.String("column", col), zap.Error(err))
 					errs = append(errs, err)
 				}
-			} else {
+			case col == "query":
+				// Obfuscate query for display/logging (converts $1,$2 to ?)
+				// Raw query is already stored separately for EXPLAIN
+				val, err = obfuscateSQL(row[col])
+				if err != nil {
+					logger.Error("failed to obfuscate query", zap.String("query", row[col]))
+					val = ""
+				}
+			default:
 				val = row[col]
 			}
 			if hasConvention[col] != "" {

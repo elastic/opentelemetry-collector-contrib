@@ -46,6 +46,7 @@ Editors:
 Available Editors:
 
 - [append](#append)
+- [delete_index](#delete_index)
 - [delete_key](#delete_key)
 - [delete_matching_keys](#delete_matching_keys)
 - [keep_matching_keys](#keep_matching_keys)
@@ -58,6 +59,7 @@ Available Editors:
 - [replace_match](#replace_match)
 - [replace_pattern](#replace_pattern)
 - [set](#set)
+- [stringify_all](#stringify_all)
 - [truncate_all](#truncate_all)
 
 ### append
@@ -72,6 +74,22 @@ Resulting field is always of type `pcommon.Slice` and will not convert the types
 - `append(log.attributes["tags"], "prod")`
 - `append(log.attributes["tags"], values = ["staging", "staging:east"])`
 - `append(log.attributes["tags_copy"], log.attributes["tags"])`
+
+### delete_index
+
+`delete_index(target, startIndex, Optional[endIndex])`
+
+The `delete_index` function removes elements from a slice. It deletes elements from `startIndex` up to, but not including, `endIndex`. If `endIndex` is not provided, only the element at `target[startIndex]` is deleted. If `startIndex` equals `endIndex`, no changes are applied to the target.
+
+Examples:
+
+- `delete_index(attributes["tags"], 0)` # deletes first
+
+- `delete_index(attributes["tags"], Len(attributes["tags"]) - 1)` # deletes last
+
+- `delete_index(attributes["tags"], 0, 3)` # deletes indices 0, 1, & 2
+
+- `delete_index(attributes["tags"], Index(attributes["tags"], "unparsed"))` # deletes first occurrence of "unparsed"
 
 ### delete_key
 
@@ -429,22 +447,45 @@ Examples:
 
 - `set(span.attributes["source"], span.trace_state["source"])`
 
+### stringify_all
+
+`stringify_all(target)`
+
+The `stringify_all` function converts all non-string values in a `pcommon.Map` to their string representation.
+
+`target` is a path expression to a `pcommon.Map` type field.
+
+The map will be mutated such that all values are of type string. Values already of type string are unchanged. Non-string values are converted using their standard string representation:
+- `int64`/`float64`: numeric string (e.g., `"42"`, `"3.14"`)
+- `bool`: `"true"` or `"false"`
+- `[]byte`: base64-encoded string
+- `pcommon.Map`: JSON-marshaled string
+- `pcommon.Slice`: JSON-marshaled string
+- Empty: `""`
+
+Examples:
+
+- `stringify_all(log.attributes)`
+- `stringify_all(resource.attributes)`
+
 ### truncate_all
 
-`truncate_all(target, limit)`
+`truncate_all(target, limit, Optional[utf8_safe])`
 
 The `truncate_all` function truncates all string values in a `pcommon.Map` so that none are longer than the limit.
 
-`target` is a path expression to a `pcommon.Map` type field. `limit` is a non-negative integer.
+`target` is a path expression to a `pcommon.Map` type field. `limit` is a non-negative integer representing the maximum number of bytes. `utf8_safe` is an optional boolean (default: `true`) that enables UTF-8 aware truncation.
 
-The map will be mutated such that the number of characters in all string values is less than or equal to the limit. Non-string values are ignored.
+The map will be mutated such that the number of bytes in all string values is less than or equal to the limit. Non-string values are ignored.
+
+This function treats input as valid UTF-8. Truncation is done only at UTF-8 character boundaries so that multi-byte characters are never cut in the middle and the result is always valid UTF-8. If cutting at exactly the `limit` would split a multi-byte character, the string is cut earlier, so the result may be slightly shorter than `limit`.
+
+When `utf8_safe` is set to `false`, truncation is applied at the byte limit only. Multi-byte UTF-8 characters may be split and the result can be invalid UTF-8. This mode is faster but should only be used when preserving valid UTF-8 is not required.
 
 Examples:
 
 - `truncate_all(log.attributes, 100)`
-
-
-- `truncate_all(resource.attributes, 50)`
+- `truncate_all(resource.attributes, 50, false)`
 
 ## Converters
 
@@ -453,9 +494,11 @@ Unlike functions, they do not modify any input telemetry and always return a val
 
 Available Converters:
 
-- [Base64Decode](#base64decode)
+- [Base64Decode](#base64decode-deprecated)
+- [Base64Encode](#base64encode)
 - [Bool](#bool)
 - [Decode](#decode)
+- [Coalesce](#coalesce)
 - [CommunityID](#communityid)
 - [Concat](#concat)
 - [ContainsValue](#containsvalue)
@@ -481,6 +524,7 @@ Available Converters:
 - [Int](#int)
 - [IsBool](#isbool)
 - [IsDouble](#isdouble)
+- [IsInCIDR](#isincidr)
 - [IsInt](#isint)
 - [IsRootSpan](#isrootspan)
 - [IsMap](#ismap)
@@ -529,12 +573,16 @@ Available Converters:
 - [ToSnakeCase](#tosnakecase)
 - [ToUpperCase](#touppercase)
 - [TraceID](#traceid)
+- [Trim](#trim)
+- [TrimPrefix](#trimprefix)
+- [TrimSuffix](#trimsuffix) 
 - [TruncateTime](#truncatetime)
 - [Unix](#unix)
 - [UnixMicro](#unixmicro)
 - [UnixMilli](#unixmilli)
 - [UnixNano](#unixnano)
 - [UnixSeconds](#unixseconds)
+- [URL](#url)
 - [UserAgent](#useragent)
 - [UUID](#UUID)
 - [UUIDv7](#UUIDv7)
@@ -560,6 +608,28 @@ Examples:
 
 
 - `Base64Decode(resource.attributes["encoded field"])`
+
+### Base64Encode
+
+`Base64Encode(value, Optional[variant])`
+
+The `Base64Encode` Converter takes a string and returns a base64 encoded string.
+
+`value` is a string to encode.
+`variant` (optional) is the base64 encoding variant to use. Valid values are `base64` (standard, with padding), `base64-raw` (standard, no padding), `base64-url` (URL-safe, with padding), or `base64-raw-url` (URL-safe, no padding). Defaults to `base64` if not specified.
+
+Examples:
+
+- `Base64Encode("test string")`
+
+
+- `Base64Encode(resource.attributes["field"])`
+
+
+- `Base64Encode(body, "base64-url")`
+
+
+- `Base64Encode(attributes["data"], "base64-raw")`
 
 ### Bool
 
@@ -606,6 +676,23 @@ Examples:
 
 
 - `Decode(resource.attributes["encoded field"], "us-ascii")`
+
+### Coalesce
+
+`Coalesce(values[])`
+
+The `Coalesce` Converter returns the first non-nil value from a list of values.
+
+`values` is a list of values. Each can be a path expression, a literal, or a nested converter call. At least one value is required.
+
+If all values are `nil`, the Converter returns `nil`.
+
+Examples:
+
+- `Coalesce([attributes["user.id"], attributes["enduser.id"], "unknown"])`
+
+
+- `Coalesce([resource.attributes["deployment.environment.name"], resource.attributes["deployment.environment"]])`
 
 ### CommunityID
 
@@ -721,6 +808,7 @@ The `ConvertTextToElementsXML` Converter returns an edited version of an XML str
 
 `target` is a Getter that returns a string. This string should be in XML format.
 If `target` is not a string, nil, or cannot be parsed as XML, `ConvertTextToElementsXML` will return an error.
+Conversion is bounded by a maximum XML nesting depth of 10,000 levels; deeper documents return an error.
 
 `xpath` (optional) is a string that specifies an [XPath](https://www.w3.org/TR/1999/REC-xpath-19991116/) expression that
 selects one or more elements. Content will only be converted within the result(s) of the xpath. The default is `/`.
@@ -1249,6 +1337,20 @@ Examples:
 
 - `IsDouble(log.attributes["maybe a double"])`
 
+### IsInCIDR
+
+`IsInCIDR(target, networks[])`
+
+The `IsInCIDR` Converter returns true if the given target IP address falls within any of the specified network ranges.
+
+The `target` is either a path expression to a telemetry field to retrieve, or a literal. The `networks` is a list of CIDR addresses.
+
+Examples:
+
+- `IsInCIDR(resource.attributes["server.ip"], ["192.168.0.0/16"])`
+
+- `IsInCIDR(resource.attributes["server.ip"], ["192.168.0.0/16", "10.0.0.0/8"])`
+
 ### IsInt
 
 `IsInt(value)`
@@ -1741,6 +1843,8 @@ This Converter should be preferred over `ParseXML` when minor semantic details (
 This Converter disregards certain aspects of XML, specifically attributes and extraneous text content, in order to produce
 a direct representation of XML data. Users are encouraged to simplify their XML documents prior to using `ParseSimplifiedXML`.
 
+Parsing is bounded by a maximum nesting depth of 10,000 levels; deeper documents return an error.
+
 See other functions which may be useful for preparing XML documents:
 
 - [`ConvertAttributesToElementsXML`](#convertattributestoelementsxml)
@@ -1871,6 +1975,8 @@ Unmarshalling XML is done using the following rules:
 3. The attributes for an XML element is placed as a `pcommon.Map` into the `attribute` field.
 4. Processing instructions, directives, and comments are ignored and not represented in the resultant map.
 5. All child elements are parsed as above, and placed in a `pcommon.Slice`, which is then placed into the `children` field.
+
+Parsing is bounded by a maximum nesting depth of 10,000 levels; deeper documents return an error.
 
 For example, the following XML document:
 ```xml
@@ -2301,11 +2407,11 @@ Examples:
 
 ### Substring
 
-`Substring(target, start, length)`
+`Substring(target, start, length, Optional[utf8_safe])`
 
 The `Substring` Converter returns a substring from the given start index to the specified length.
 
-`target` is a string. `start` and `length` are `int64`.
+`target` is a string. `start` and `length` are byte offsets as `int64`. `utf8_safe` is an optional boolean (default: `false`); when `true`, a mid-character `start` advances to the next UTF-8 boundary and a mid-character end (`start+length`) backs up to the previous one, so multi-byte characters are never split, and the result may be shorter than `length` bytes.
 
 If `target` is not a string or is nil, an error is returned.
 If the start/length exceed the length of the `target` string, an error is returned.
@@ -2313,6 +2419,7 @@ If the start/length exceed the length of the `target` string, an error is return
 Examples:
 
 - `Substring("123456789", 0, 3)`
+- `Substring("一二三", 0, 4, true)`
 
 ### Time
 

@@ -17,7 +17,12 @@ import (
 	"go.uber.org/zap"
 )
 
-var defaultBucket = []byte(`default`)
+var (
+	defaultBucket = []byte(`default`)
+
+	// Ensure fileStorageClient implements the Walker interface
+	_ storage.Walker = (*fileStorageClient)(nil)
+)
 
 const (
 	TempDbPrefix = "tempdb"
@@ -35,7 +40,8 @@ type fileStorageClient struct {
 	db              *bbolt.DB
 	compactionCfg   *CompactionConfig
 	openTimeout     time.Duration
-	cancel          context.CancelFunc
+	stopCh          chan struct{}
+	wg              sync.WaitGroup
 	closed          bool
 }
 
@@ -64,9 +70,16 @@ func newClient(logger *zap.Logger, filePath string, timeout time.Duration, compa
 		return nil, err
 	}
 
-	client := &fileStorageClient{logger: logger, db: db, compactionCfg: compactionCfg, openTimeout: timeout}
+	client := &fileStorageClient{
+		logger:        logger,
+		db:            db,
+		compactionCfg: compactionCfg,
+		openTimeout:   timeout,
+		stopCh:        make(chan struct{}),
+		wg:            sync.WaitGroup{},
+	}
 	if compactionCfg.OnRebound {
-		client.startCompactionLoop(context.Background())
+		client.startCompactionLoop()
 	}
 
 	return client, nil
@@ -101,33 +114,7 @@ func (c *fileStorageClient) Batch(_ context.Context, ops ...*storage.Operation) 
 			return errors.New("storage not initialized")
 		}
 
-		var err error
-		for _, op := range ops {
-			switch op.Type {
-			case storage.Get:
-				value := bucket.Get([]byte(op.Key))
-				if value != nil {
-					// the output of Bucket.Get is only valid within a transaction, so we need to make a copy
-					// to be able to return the value
-					op.Value = make([]byte, len(value))
-					copy(op.Value, value)
-				} else {
-					op.Value = nil
-				}
-			case storage.Set:
-				err = bucket.Put([]byte(op.Key), op.Value)
-			case storage.Delete:
-				err = bucket.Delete([]byte(op.Key))
-			default:
-				return errors.New("wrong operation type")
-			}
-
-			if err != nil {
-				return err
-			}
-		}
-
-		return nil
+		return updateBucket(bucket, ops...)
 	}
 
 	c.compactionMutex.RLock()
@@ -135,14 +122,88 @@ func (c *fileStorageClient) Batch(_ context.Context, ops ...*storage.Operation) 
 	return c.db.Update(batch)
 }
 
+// Walk implements storage.Walker.
+func (c *fileStorageClient) Walk(ctx context.Context, fn storage.WalkFunc) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	c.compactionMutex.RLock()
+	defer c.compactionMutex.RUnlock()
+
+	if c.closed {
+		return errors.New("storage is closed")
+	}
+
+	return c.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(defaultBucket)
+		if bucket == nil {
+			return errors.New("storage not initialized")
+		}
+
+		var opBatch []*storage.Operation
+		cur := bucket.Cursor()
+		for k, v := cur.First(); k != nil; k, v = cur.Next() {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			ops, err := fn(string(k), v)
+			if err != nil {
+				if errors.Is(err, storage.SkipAll) {
+					opBatch = append(opBatch, ops...)
+					return updateBucket(bucket, opBatch...)
+				}
+				return err
+			}
+			opBatch = append(opBatch, ops...)
+		}
+		return updateBucket(bucket, opBatch...)
+	})
+}
+
+// updateBucket executes the specified operations in order for a given bucket. Get operation results are updated in place
+// The function caller must hold a read lock on compactionMutex.
+func updateBucket(bucket *bbolt.Bucket, ops ...*storage.Operation) error {
+	var err error
+	for _, op := range ops {
+		switch op.Type {
+		case storage.Get:
+			value := bucket.Get([]byte(op.Key))
+			if value != nil {
+				// the output of Bucket.Get is only valid within a transaction, so we need to make a copy
+				// to be able to return the value
+				op.Value = make([]byte, len(value))
+				copy(op.Value, value)
+			} else {
+				op.Value = nil
+			}
+		case storage.Set:
+			err = bucket.Put([]byte(op.Key), op.Value)
+		case storage.Delete:
+			err = bucket.Delete([]byte(op.Key))
+		default:
+			return errors.New("wrong operation type")
+		}
+
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 // Close will close the database
 func (c *fileStorageClient) Close(_ context.Context) error {
 	c.compactionMutex.Lock()
 	defer c.compactionMutex.Unlock()
 
-	if c.cancel != nil {
-		c.cancel()
+	if c.closed {
+		return nil
 	}
+
+	close(c.stopCh)
+	c.wg.Wait()
 	c.closed = true
 	return c.db.Close()
 }
@@ -206,21 +267,21 @@ func (c *fileStorageClient) Compact(compactionDirectory string, timeout time.Dur
 	c.db.Close()
 	compactedDb.Close()
 
-	var openErr error
 	// replace current db file with compacted db file
 	// we reopen the DB file irrespective of the success of the replace, as we can't leave it closed
 	moveErr := moveFileWithFallback(compactedDbPath, dbPath)
-	c.db, openErr = bbolt.Open(dbPath, 0o600, options)
-
-	// if we got errors for both rename and open, we'd rather return the open one
-	// this should not happen in any kind of normal circumstance - maybe we should panic instead?
+	newDb, openErr := bbolt.Open(dbPath, 0o600, options)
 	if openErr != nil {
+		// Leave c.db pointing at the old (closed) DB so that callers get
+		// errors from the closed DB instead of panicking on a nil pointer.
 		return fmt.Errorf("failed to open db after compaction: %w", openErr)
 	}
+	c.db = newDb
+
 	if moveErr != nil {
 		// if we only failed the remove, we're mostly ok and should just log a warning
 		var pathErr *os.PathError
-		if errors.As(err, &pathErr) {
+		if errors.As(moveErr, &pathErr) {
 			if pathErr.Op == "remove" {
 				c.logger.Warn("failed to remove temporary db after compaction",
 					zap.String(directoryKey, c.db.Path()),
@@ -241,10 +302,8 @@ func (c *fileStorageClient) Compact(compactionDirectory string, timeout time.Dur
 }
 
 // startCompactionLoop provides asynchronous compaction function
-func (c *fileStorageClient) startCompactionLoop(ctx context.Context) {
-	ctx, c.cancel = context.WithCancel(ctx)
-
-	go func() {
+func (c *fileStorageClient) startCompactionLoop() {
+	c.wg.Go(func() {
 		c.logger.Debug("starting compaction loop",
 			zap.Duration("compaction_check_interval", c.compactionCfg.CheckInterval))
 
@@ -262,12 +321,12 @@ func (c *fileStorageClient) startCompactionLoop(ctx context.Context) {
 							zap.Error(err))
 					}
 				}
-			case <-ctx.Done():
+			case <-c.stopCh:
 				c.logger.Debug("shutting down compaction loop")
 				return
 			}
 		}
-	}()
+	})
 }
 
 // shouldCompact checks whether the conditions for online compaction are met
