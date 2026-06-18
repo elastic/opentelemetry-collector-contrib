@@ -91,6 +91,7 @@ func TestMetricsScraperUsesCredentialsProvider(t *testing.T) {
 	})
 	require.NoError(t, scraper.start(t.Context(), host))
 	require.NotNil(t, scraper.client)
+	require.NotNil(t, scraper.stsClient)
 }
 
 func TestLogsReceiverUsesCredentialsProvider(t *testing.T) {
