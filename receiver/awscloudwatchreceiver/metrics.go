@@ -110,6 +110,9 @@ func (s *cloudWatchMetricsScraper) start(ctx context.Context, host component.Hos
 		cfg.Credentials = creds
 	}
 	s.client = cloudwatch.NewFromConfig(cfg)
+	// Build the STS client from the same cfg AFTER the credentials override so that
+	// GetCallerIdentity resolves the effective (possibly assumed-role) account that the
+	// CloudWatch client also uses, rather than the base credentials' account.
 	if s.stsClient == nil {
 		s.stsClient = sts.NewFromConfig(cfg)
 	}
