@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 	"time"
 
 	"go.opentelemetry.io/collector/component"
@@ -14,6 +15,9 @@ import (
 	"go.opentelemetry.io/collector/confmap"
 	"go.opentelemetry.io/collector/scraper/scraperhelper"
 )
+
+// accountIDPattern matches an AWS account ID: exactly 12 digits.
+var accountIDPattern = regexp.MustCompile(`^\d{12}$`)
 
 var (
 	defaultPollInterval         = time.Minute
@@ -33,6 +37,11 @@ type Config struct {
 	Logs         LogsConfig    `mapstructure:"logs"`
 	Metrics      MetricsConfig `mapstructure:"metrics"`
 	StorageID    *component.ID `mapstructure:"storage"`
+	// CredentialsProvider optionally references an awscredentialsprovider extension by
+	// component ID. When set, the extension's resolved credentials are used for the
+	// CloudWatch clients instead of the default SDK credential chain. This is not a
+	// configauth authenticator; the extension only supplies an aws.CredentialsProvider.
+	CredentialsProvider *component.ID `mapstructure:"credentials_provider"`
 }
 
 // MetricsConfig is the configuration for the metrics (GetMetricData) portion of this receiver.
@@ -54,10 +63,19 @@ type MetricsConfig struct {
 // Discovered metrics are then scraped with GetMetricData. Mutually exclusive with metrics (explicit list).
 type MetricsDiscoveryConfig struct {
 	Filters configoptional.Optional[MetricsDiscoveryFilters] `mapstructure:"filters"`
-	Limit   int                                              `mapstructure:"limit"` // max metrics to discover and scrape (default 100)
+	// Limit is the maximum number of metrics to discover and scrape per account (default 100).
+	// In a cross-account setup it applies independently to each source account.
+	Limit int `mapstructure:"limit"`
 	// Stats selects which CloudWatch statistics to fetch for all discovered metrics.
 	// Same semantics as MetricQuery.Stats.
 	Stats []string `mapstructure:"stats"`
+	// IncludeLinkedAccounts, when true and run from a monitoring account, discovers
+	// metrics from linked source accounts in addition to (or filtered by) AccountIdentifiers.
+	IncludeLinkedAccounts *bool `mapstructure:"include_linked_accounts"`
+	// AccountIdentifiers optionally narrows cross-account discovery to specific source
+	// accounts. ListMetrics filters one owning account at a time, so each identifier is
+	// queried separately. Requires IncludeLinkedAccounts to be true.
+	AccountIdentifiers []string `mapstructure:"account_identifiers"`
 }
 
 // MetricsDiscoveryFilters optionally narrows which metrics are discovered.
@@ -79,6 +97,11 @@ type MetricQuery struct {
 	MetricName string            `mapstructure:"metric_name"`
 	Dimensions map[string]string `mapstructure:"dimensions"`
 	Stats      []string          `mapstructure:"stats"`
+	// AccountID optionally identifies the AWS account the metric is located in (its
+	// source account). In a cross-account monitoring setup it selects which account to
+	// retrieve the metric from via GetMetricData and is reported as the cloud.account.id
+	// resource attribute. When empty, the receiver's own resolved account ID is used.
+	AccountID string `mapstructure:"account_id"`
 }
 
 // LogsConfig is the configuration for the logs portion of this receiver
@@ -125,6 +148,8 @@ var (
 	errMetricMissingName                = errors.New("metric must have metric_name")
 	errMetricsAndDiscoveryConfigured    = errors.New("metrics and discovery are mutually exclusive; set one or the other")
 	errInvalidDiscoveryLimit            = errors.New("metrics discovery limit must be greater than 0")
+	errAccountIdentifiersWithoutLinked  = errors.New("metrics.discovery.account_identifiers requires include_linked_accounts to be true")
+	errInvalidAccountID                 = errors.New("account id must be a 12-digit number")
 	errEmptyStatName                    = errors.New("stat name must not be empty")
 	errCollectionIntervalLessThanPeriod = errors.New("metrics collection_interval must be greater than or equal to period")
 )
@@ -183,6 +208,15 @@ func (c *Config) validateMetricsConfig() error {
 		if discovery.Limit <= 0 {
 			return errInvalidDiscoveryLimit
 		}
+		if len(discovery.AccountIdentifiers) > 0 &&
+			(discovery.IncludeLinkedAccounts == nil || !*discovery.IncludeLinkedAccounts) {
+			return errAccountIdentifiersWithoutLinked
+		}
+		for j, id := range discovery.AccountIdentifiers {
+			if !accountIDPattern.MatchString(id) {
+				return fmt.Errorf("metrics.discovery.account_identifiers[%d] %q: %w", j, id, errInvalidAccountID)
+			}
+		}
 		for j, st := range discovery.Stats {
 			if st == "" {
 				return fmt.Errorf("metrics.discovery.stats[%d]: %w", j, errEmptyStatName)
@@ -202,6 +236,9 @@ func (c *Config) validateMetricsConfig() error {
 		}
 		if m.MetricName == "" {
 			return fmt.Errorf("metrics[%d]: %w", i, errMetricMissingName)
+		}
+		if m.AccountID != "" && !accountIDPattern.MatchString(m.AccountID) {
+			return fmt.Errorf("metrics[%d].account_id %q: %w", i, m.AccountID, errInvalidAccountID)
 		}
 		for j, st := range m.Stats {
 			if st == "" {
