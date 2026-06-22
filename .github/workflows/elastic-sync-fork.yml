@@ -1,0 +1,25 @@
+name: elastic-sync-fork
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "27 12 * * 1-5" # Run at 12:27 UTC every day from Monday to Friday.
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: elastic/oblt-actions/github/create-token@v1
+        id: fetch-token
+
+      - name: Synchronize fork
+        run: gh repo sync $REPOSITORY -b $BRANCH_NAME
+        env:
+          GITHUB_TOKEN: ${{ steps.fetch-token.outputs.token }}
+          REPOSITORY: ${{ github.repository }}
+          BRANCH_NAME: ${{ github.ref_name }}
