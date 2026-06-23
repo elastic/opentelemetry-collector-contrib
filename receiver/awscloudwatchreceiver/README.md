@@ -100,6 +100,7 @@ Instead of listing metrics manually, the receiver can call [ListMetrics](https:/
 | `filters.metric_name`  | String          | —       | Restrict discovery to metrics with this name. |
 | `limit`                | Integer         | 100     | Maximum number of metrics to discover and scrape, applied **per account** (in a cross-account setup, each source account may contribute up to `limit` metrics). |
 | `stats`                | List of strings | —       | Statistics to fetch for every discovered metric. Same values as in `queries`. |
+| `recently_active`      | Boolean         | false   | When `true`, only discover metrics that published data in the **last three hours** (the `ListMetrics` `RecentlyActive=PT3H` filter) instead of the default two-week window. In accounts with high resource churn (e.g. autoscaling) this can reduce the number of discovered metrics — and therefore GetMetricData cost — by an order of magnitude, by excluding metrics from terminated resources. `PT3H` is the only window AWS supports for this filter. |
 | `include_linked_accounts` | Boolean      | false   | When running in a monitoring account, discover metrics from linked source accounts. See [Cross-account monitoring](#cross-account-monitoring). |
 | `account_identifiers`  | List of strings | —       | Restrict cross-account discovery to specific source account IDs (each a 12-digit account ID). Requires `include_linked_accounts: true`. When omitted (with `include_linked_accounts: true`), metrics from all linked accounts are discovered. |
 
