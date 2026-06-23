@@ -250,6 +250,11 @@ func (s *cloudWatchMetricsScraper) discoverMetrics(ctx context.Context, owningAc
 	if owningAccount != "" {
 		input.OwningAccount = aws.String(owningAccount)
 	}
+	if s.discovery.RecentlyActive {
+		// Restrict discovery to metrics active in the last three hours. PT3H is the only
+		// value AWS accepts for this filter.
+		input.RecentlyActive = types.RecentlyActivePt3h
+	}
 
 	// singleAccount is true whenever every returned metric belongs to one account, so we
 	// can stop paginating once the limit is reached. The all-linked sweep must page fully
