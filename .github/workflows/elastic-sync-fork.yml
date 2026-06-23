@@ -18,7 +18,7 @@ jobs:
         id: fetch-token
 
       - name: Synchronize fork
-        run: gh repo sync $REPOSITORY -b main
+        run: gh repo sync $REPOSITORY -b main --force
         env:
           GITHUB_TOKEN: ${{ steps.fetch-token.outputs.token }}
           REPOSITORY: ${{ github.repository }}
