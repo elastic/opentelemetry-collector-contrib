@@ -69,6 +69,13 @@ type MetricsDiscoveryConfig struct {
 	// Stats selects which CloudWatch statistics to fetch for all discovered metrics.
 	// Same semantics as MetricQuery.Stats.
 	Stats []string `mapstructure:"stats"`
+	// RecentlyActive, when true, restricts discovery to metrics that have published data
+	// in the past three hours (the ListMetrics RecentlyActive=PT3H filter). By default
+	// ListMetrics returns every metric that reported data in the past two weeks, which
+	// includes metrics from terminated resources. Enabling this dramatically reduces the
+	// number of discovered metrics (and therefore GetMetricData cost) in accounts with
+	// high resource churn. PT3H is the only window AWS supports for this filter.
+	RecentlyActive bool `mapstructure:"recently_active"`
 	// IncludeLinkedAccounts, when true and run from a monitoring account, discovers
 	// metrics from linked source accounts in addition to (or filtered by) AccountIdentifiers.
 	IncludeLinkedAccounts *bool `mapstructure:"include_linked_accounts"`
