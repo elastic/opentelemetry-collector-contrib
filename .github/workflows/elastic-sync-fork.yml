@@ -51,13 +51,9 @@ jobs:
           # Push tags without force to preserve locally modified tags
           # Tag conflicts are allowed to continue (with warnings) to enable automated syncing
           # while preventing accidental overwrites of tags that may have been modified locally
-          set +e  # Don't exit immediately on error
-          git push origin --tags > "$OUTPUT_FILE" 2>&1
-          PUSH_EXIT_CODE=$?
-          set -e
-          
-          if [ $PUSH_EXIT_CODE -ne 0 ]; then
-            if grep -qE "(rejected|non-fast-forward|remote rejected)" "$OUTPUT_FILE"; then
+          if ! git push origin --tags > "$OUTPUT_FILE" 2>&1; then
+            PUSH_EXIT_CODE=$?
+            if grep -qE "! \[(rejected|remote rejected)\]|non-fast-forward" "$OUTPUT_FILE"; then
               echo "::warning::Some tags were rejected due to conflicts between fork and upstream."
               echo "::warning::This prevents accidental overwrites of locally modified tags."
               echo "::warning::This is expected behavior and allows automated syncing to continue."
@@ -66,6 +62,6 @@ jobs:
             else
               echo "::error::Tag push failed due to an unexpected error (not a conflict)"
               cat "$OUTPUT_FILE"
-              exit 1  # Fail for other errors like auth or network issues
+              exit "$PUSH_EXIT_CODE"  # Fail with the actual git push exit code
             fi
           fi
