@@ -9,13 +9,10 @@ permissions:
   contents: read
 
 jobs:
-  sync:
+  sync-branches:
     runs-on: ubuntu-latest
     permissions:
       id-token: write
-      contents: write
-    env:
-      UPSTREAM_REPO: https://github.com/open-telemetry/opentelemetry-collector-contrib.git
     steps:
       - uses: elastic/oblt-actions/github/create-token@v1
         id: fetch-token
@@ -25,6 +22,18 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ steps.fetch-token.outputs.token }}
           REPOSITORY: ${{ github.repository }}
+
+  sync-tags:
+    runs-on: ubuntu-latest
+    needs: sync-branches
+    permissions:
+      id-token: write
+      contents: write
+    env:
+      UPSTREAM_REPO: https://github.com/open-telemetry/opentelemetry-collector-contrib.git
+    steps:
+      - uses: elastic/oblt-actions/github/create-token@v1
+        id: fetch-token
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -37,7 +46,7 @@ jobs:
           # Add upstream remote if it doesn't exist
           git remote get-url upstream || git remote add upstream "$UPSTREAM_REPO"
           git fetch upstream --tags
-          # Force push is intentional to ensure fork tags match upstream exactly
-          git push origin --tags --force
+          # Push tags without force to avoid overwriting modified tags
+          git push origin --tags
         env:
           GITHUB_TOKEN: ${{ steps.fetch-token.outputs.token }}
