@@ -50,10 +50,14 @@ jobs:
           # If a tag already exists with different content, the push will fail
           # This is intentional to prevent accidental overwrites
           if ! git push origin --tags 2>&1 | tee /tmp/push-output.txt; then
-            echo "::warning::Some tags failed to push. This may indicate tags that differ between fork and upstream."
-            echo "::warning::Review the tags and manually force-push if needed: git push origin --tags --force"
-            grep -i "rejected" /tmp/push-output.txt || true
-            exit 0  # Don't fail the workflow, just warn
+            if grep -qE "(rejected|non-fast-forward)" /tmp/push-output.txt; then
+              echo "::warning::Some tags were rejected due to conflicts between fork and upstream."
+              echo "::warning::This prevents accidental overwrites of locally modified tags."
+              echo "::warning::Review the tags and manually force-push if needed: git push origin --tags --force"
+              exit 0  # Don't fail the workflow for tag conflicts
+            else
+              echo "::error::Tag push failed due to an unexpected error (not a conflict)"
+              cat /tmp/push-output.txt
+              exit 1  # Fail for other errors like auth or network issues
+            fi
           fi
-        env:
-          GITHUB_TOKEN: ${{ steps.fetch-token.outputs.token }}
