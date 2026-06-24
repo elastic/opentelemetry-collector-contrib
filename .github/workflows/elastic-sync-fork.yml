@@ -44,15 +44,19 @@ jobs:
       - name: Fetch and push upstream tags
         run: |
           # Add upstream remote if it doesn't exist
-          git remote get-url upstream || git remote add upstream "$UPSTREAM_REPO"
+          if ! git remote get-url upstream 2>/dev/null; then
+            git remote add upstream "$UPSTREAM_REPO"
+            echo "Added upstream remote"
+          fi
           git fetch upstream --tags
           # Push tags without force to preserve locally modified tags
-          # If a tag already exists with different content, the push will fail
-          # This is intentional to prevent accidental overwrites
+          # Tag conflicts are allowed to continue (with warnings) to enable automated syncing
+          # while preventing accidental overwrites of tags that may have been modified locally
           if ! git push origin --tags 2>&1 | tee /tmp/push-output.txt; then
             if grep -qE "(rejected|non-fast-forward)" /tmp/push-output.txt; then
               echo "::warning::Some tags were rejected due to conflicts between fork and upstream."
               echo "::warning::This prevents accidental overwrites of locally modified tags."
+              echo "::warning::This is expected behavior and allows automated syncing to continue."
               echo "::warning::Review the tags and manually force-push if needed: git push origin --tags --force"
               exit 0  # Don't fail the workflow for tag conflicts
             else
