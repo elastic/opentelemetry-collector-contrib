@@ -13,12 +13,27 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       id-token: write
+      contents: write
     steps:
       - uses: elastic/oblt-actions/github/create-token@v1
         id: fetch-token
 
       - name: Synchronize fork
-        run: gh repo sync $REPOSITORY -b main --force
+        run: gh repo sync "$REPOSITORY" -b main --force
         env:
           GITHUB_TOKEN: ${{ steps.fetch-token.outputs.token }}
           REPOSITORY: ${{ github.repository }}
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ steps.fetch-token.outputs.token }}
+
+      - name: Fetch and push upstream tags
+        run: |
+          git remote add upstream https://github.com/open-telemetry/opentelemetry-collector-contrib.git
+          git fetch upstream --tags
+          git push origin --tags --force
+        env:
+          GITHUB_TOKEN: ${{ steps.fetch-token.outputs.token }}
