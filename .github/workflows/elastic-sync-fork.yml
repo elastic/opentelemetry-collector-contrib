@@ -14,6 +14,8 @@ jobs:
     permissions:
       id-token: write
       contents: write
+    env:
+      UPSTREAM_REPO: https://github.com/open-telemetry/opentelemetry-collector-contrib.git
     steps:
       - uses: elastic/oblt-actions/github/create-token@v1
         id: fetch-token
@@ -33,7 +35,7 @@ jobs:
       - name: Fetch and push upstream tags
         run: |
           # Add upstream remote if it doesn't exist
-          git remote get-url upstream || git remote add upstream https://github.com/open-telemetry/opentelemetry-collector-contrib.git
+          git remote get-url upstream || git remote add upstream "$UPSTREAM_REPO"
           git fetch upstream --tags
           # Force push is intentional to ensure fork tags match upstream exactly
           git push origin --tags --force
