@@ -32,8 +32,10 @@ jobs:
 
       - name: Fetch and push upstream tags
         run: |
-          git remote add upstream https://github.com/open-telemetry/opentelemetry-collector-contrib.git
+          # Add upstream remote if it doesn't exist
+          git remote get-url upstream || git remote add upstream https://github.com/open-telemetry/opentelemetry-collector-contrib.git
           git fetch upstream --tags
+          # Force push is intentional to ensure fork tags match upstream exactly
           git push origin --tags --force
         env:
           GITHUB_TOKEN: ${{ steps.fetch-token.outputs.token }}
