@@ -43,6 +43,7 @@ jobs:
 
       - name: Fetch and push upstream tags
         run: |
+          trap 'rm -f /tmp/push-output.txt' EXIT
           # Add upstream remote (fresh checkout only has origin by default)
           git remote add upstream "$UPSTREAM_REPO"
           git fetch upstream --tags
@@ -50,23 +51,20 @@ jobs:
           # Tag conflicts are allowed to continue (with warnings) to enable automated syncing
           # while preventing accidental overwrites of tags that may have been modified locally
           set +e  # Don't exit immediately on error
-          git push origin --tags 2>&1 | tee /tmp/push-output.txt
+          git push origin --tags > /tmp/push-output.txt 2>&1
           PUSH_EXIT_CODE=$?
           set -e
           
           if [ $PUSH_EXIT_CODE -ne 0 ]; then
-            if grep -qE "(\[rejected\]|rejected|non-fast-forward)" /tmp/push-output.txt; then
+            if grep -qE "(\[rejected\]|non-fast-forward|! \[remote rejected\])" /tmp/push-output.txt; then
               echo "::warning::Some tags were rejected due to conflicts between fork and upstream."
               echo "::warning::This prevents accidental overwrites of locally modified tags."
               echo "::warning::This is expected behavior and allows automated syncing to continue."
               echo "::warning::Review the tags and manually force-push if needed: git push origin --tags --force"
-              rm -f /tmp/push-output.txt
               exit 0  # Don't fail the workflow for tag conflicts
             else
               echo "::error::Tag push failed due to an unexpected error (not a conflict)"
               cat /tmp/push-output.txt
-              rm -f /tmp/push-output.txt
               exit 1  # Fail for other errors like auth or network issues
             fi
           fi
-          rm -f /tmp/push-output.txt
