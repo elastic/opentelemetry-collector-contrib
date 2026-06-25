@@ -38,7 +38,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
-          fetch-depth: 0
+          fetch-tags: true
           token: ${{ steps.fetch-token.outputs.token }}
 
       - name: Fetch and push upstream tags
