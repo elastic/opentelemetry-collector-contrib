@@ -43,6 +43,7 @@ jobs:
 
       - name: Fetch and push upstream tags
         run: |
+          set -o pipefail
           OUTPUT_FILE=$(mktemp)
           trap 'rm -f "$OUTPUT_FILE"' EXIT
           # Add upstream remote (fresh checkout only has origin by default)
