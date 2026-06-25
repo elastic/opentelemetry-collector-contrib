@@ -38,30 +38,51 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
-          fetch-depth: 0
+          fetch-tags: true
           token: ${{ steps.fetch-token.outputs.token }}
 
       - name: Fetch and push upstream tags
         run: |
-          OUTPUT_FILE=$(mktemp)
-          trap 'rm -f "$OUTPUT_FILE"' EXIT
           # Add upstream remote (fresh checkout only has origin by default)
           git remote add upstream "$UPSTREAM_REPO"
           git fetch upstream --tags
-          # Push tags without force to preserve locally modified tags
-          # Tag conflicts are allowed to continue (with warnings) to enable automated syncing
-          # while preventing accidental overwrites of tags that may have been modified locally
-          if ! git push origin --tags > "$OUTPUT_FILE" 2>&1; then
-            PUSH_EXIT_CODE=$?
-            if grep -qE "! \[(rejected|remote rejected)\]|non-fast-forward" "$OUTPUT_FILE"; then
-              echo "::warning::Some tags were rejected due to conflicts between fork and upstream."
-              echo "::warning::This prevents accidental overwrites of locally modified tags."
-              echo "::warning::This is expected behavior and allows automated syncing to continue."
-              echo "::warning::Review the tags and manually force-push if needed: git push origin --tags --force"
-              exit 0  # Don't fail the workflow for tag conflicts
-            else
-              echo "::error::Tag push failed due to an unexpected error (not a conflict)"
-              cat "$OUTPUT_FILE"
-              exit "$PUSH_EXIT_CODE"  # Fail with the actual git push exit code
+          # Push only tags that are new in upstream and do not exist in origin.
+          origin_tags_file=$(mktemp)
+          upstream_tags_file=$(mktemp)
+          trap 'rm -f "$origin_tags_file" "$upstream_tags_file"' EXIT
+
+          git ls-remote --tags --refs origin | sed 's#.*refs/tags/##' > "$origin_tags_file"
+          git ls-remote --tags --refs upstream | sed 's#.*refs/tags/##' > "$upstream_tags_file"
+
+          pushed_count=0
+          skipped_count=0
+          unexpected_failure=0
+
+          while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            if grep -Fxq "$tag" "$origin_tags_file"; then
+              echo "Skipping existing tag on origin: $tag"
+              skipped_count=$((skipped_count + 1))
+              continue
             fi
+
+            echo "Pushing tag: $tag"
+
+            tag_output=$(mktemp)
+            if git push origin "refs/tags/$tag:refs/tags/$tag" > "$tag_output" 2>&1; then
+              cat "$tag_output"
+              pushed_count=$((pushed_count + 1))
+            else
+              cat "$tag_output"
+              echo "::error::Unexpected error while pushing tag: $tag"
+              unexpected_failure=1
+            fi
+            rm -f "$tag_output"
+          done < "$upstream_tags_file"
+
+          echo "Pushed new tags: $pushed_count"
+          echo "Skipped existing tags: $skipped_count"
+
+          if [ "$unexpected_failure" -ne 0 ]; then
+            exit 1
           fi
