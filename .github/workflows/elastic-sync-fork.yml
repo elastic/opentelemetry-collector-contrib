@@ -51,7 +51,7 @@ jobs:
           # Push tags without force to preserve locally modified tags
           # Tag conflicts are allowed to continue (with warnings) to enable automated syncing
           # while preventing accidental overwrites of tags that may have been modified locally
-          if ! git push origin --tags > "$OUTPUT_FILE" 2>&1; then
+          if ! git push origin --tags | tee "$OUTPUT_FILE" 2>&1; then
             PUSH_EXIT_CODE=$?
             if grep -qE "! \[(rejected|remote rejected)\]|non-fast-forward" "$OUTPUT_FILE"; then
               echo "::warning::Some tags were rejected due to conflicts between fork and upstream."
