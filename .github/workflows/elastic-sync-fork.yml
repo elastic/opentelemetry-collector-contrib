@@ -46,13 +46,13 @@ jobs:
           # Add upstream remote (fresh checkout only has origin by default)
           git remote add upstream "$UPSTREAM_REPO"
           git fetch upstream --tags
-          # Push only tags that are new in upstream and do not exist in origin.
+          # Push only release tags (vX.Y.Z format) that are new in upstream and do not exist in origin.
           origin_tags_file=$(mktemp)
           upstream_tags_file=$(mktemp)
           trap 'rm -f "$origin_tags_file" "$upstream_tags_file"' EXIT
 
           git ls-remote --tags --refs origin | sed 's#.*refs/tags/##' > "$origin_tags_file"
-          git ls-remote --tags --refs upstream | sed 's#.*refs/tags/##' > "$upstream_tags_file"
+          git ls-remote --tags --refs upstream | sed 's#.*refs/tags/##' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' > "$upstream_tags_file"
 
           pushed_count=0
           skipped_count=0
