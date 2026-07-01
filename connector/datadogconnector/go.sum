@@ -214,8 +214,8 @@ github.com/DataDog/datadog-agent/pkg/util/winutil v0.82.0-devel.0.20260624113434
 github.com/DataDog/datadog-agent/pkg/util/winutil v0.82.0-devel.0.20260624113434-509b872045c2/go.mod h1:qM9t2dUigYIf9rK2SYqnaPLIwMcDpvQcEHWVs7YVnsg=
 github.com/DataDog/datadog-agent/pkg/version v0.80.2 h1:yb3ywDgoY8++4zz1/Jo53Sb4fMUV3bCsfNJ8pWaBPCE=
 github.com/DataDog/datadog-agent/pkg/version v0.80.2/go.mod h1:G3gsk0zVQboZMVG7RG7IWp55S5KjDjswcJb+vprR8L0=
-github.com/DataDog/datadog-api-client-go/v2 v2.61.0 h1:PEwppagAlD6Y6BU6GcG0+bwLr0k+SBnTjOvbaUbNhyw=
-github.com/DataDog/datadog-api-client-go/v2 v2.61.0/go.mod h1:d3tOEgUd2kfsr9uuHQdY+nXrWp4uikgTgVCPdKNK30U=
+github.com/DataDog/datadog-api-client-go/v2 v2.62.0 h1:AIe01Tyl5Y+kHCJskB4Vkw6ANjHcD45bfbi//ICmAaU=
+github.com/DataDog/datadog-api-client-go/v2 v2.62.0/go.mod h1:d3tOEgUd2kfsr9uuHQdY+nXrWp4uikgTgVCPdKNK30U=
 github.com/DataDog/datadog-go/v5 v5.9.0 h1:0rhs5wBov9Iz+xLXLk4maaReHvOANM1ijSm2IKWtKFs=
 github.com/DataDog/datadog-go/v5 v5.9.0/go.mod h1:2SBt8zJu6r7sRQHZFMQ8oCukWTKj0ymwulmNgQzJ1JM=
 github.com/DataDog/go-acl v1.0.1 h1:uRbp98YmlVZYqNNyTBFNI3Y6bnziBLyCIR4nRu0bIpU=
@@ -923,8 +923,8 @@ google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa h1:
 google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa/go.mod h1:q4lMZS6kskjT5HvCPrnnypcDPVJqT/f4nfxmkE7gryY=
 google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa h1:mZHHdPZl0dbGHCflZgAq/Q468DWVFcU2whhB2KAo8fk=
 google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa/go.mod h1:4Hqkh8ycfw05ld/3BWL7rJOSfebL2Q+DVDeRgYgxUU8=
-google.golang.org/grpc v1.81.1 h1:VnnIIZ88UzOOKLukQi+ImGz8O1Wdp8nAGGnvOfEIWQQ=
-google.golang.org/grpc v1.81.1/go.mod h1:xGH9GfzOyMTGIOXBJmXt+BX/V0kcdQbdcuwQ/zNw42I=
+google.golang.org/grpc v1.82.0 h1:vguDnZUPjE26w09A63VoxZPnvPjB5Riyc0mkXPFmAIU=
+google.golang.org/grpc v1.82.0/go.mod h1:yzTZ1TB1Z3SG+LIYaI+WiE8D5+PZ3ArnrSp8zF3+/ZA=
 google.golang.org/protobuf v1.26.0-rc.1/go.mod h1:jlhhOSvTdKEhbULTjvd4ARK9grFBp09yW+WbY/TyQbw=
 google.golang.org/protobuf v1.33.0/go.mod h1:c6P6GXX6sHbq/GpV6MGZEdwhWPcYBgnhAHhKbcUYpos=
 google.golang.org/protobuf v1.36.12-0.20260116114154-8c4c4ae446ca h1:/ro7D0tSP+jEnQPzy9e1r5L6mAcEShGlE5kFsShX5O8=
