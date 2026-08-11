@@ -154,8 +154,8 @@ github.com/json-iterator/go v1.1.12 h1:PV8peI4a0ysnczrg+LtxykD8LfKY9ML6u2jnxaEnr
 github.com/json-iterator/go v1.1.12/go.mod h1:e30LSqwooZae/UwlEbR2852Gd8hjQvJoHmT4TnhNGBo=
 github.com/kamstrup/intmap v0.5.2 h1:qnwBm1mh4XAnW9W9Ue9tZtTff8pS6+s6iKF6JRIV2Dk=
 github.com/kamstrup/intmap v0.5.2/go.mod h1:gWUVWHKzWj8xpJVFf5GC0O26bWmv3GqdnIX/LMT6Aq4=
-github.com/klauspost/compress v1.19.1 h1:VsB4HPswih7mmZ8WleSFQ75c/Ui1M4trX5oAsJnhSlk=
-github.com/klauspost/compress v1.19.1/go.mod h1:cwPg85FWrGar70rWktvGQj8/hthj3wpl0PGDogxkrSQ=
+github.com/klauspost/compress v1.19.2 h1:hMRETovs/pu/dVWN7zIT1PGG8t509MwT6bO7XSi26R8=
+github.com/klauspost/compress v1.19.2/go.mod h1:cwPg85FWrGar70rWktvGQj8/hthj3wpl0PGDogxkrSQ=
 github.com/klauspost/cpuid/v2 v2.3.0 h1:S4CRMLnYUhGeDFDqkGriYKdfoFlDnMtqTiI/sFzhA9Y=
 github.com/klauspost/cpuid/v2 v2.3.0/go.mod h1:hqwkgyIinND0mEev00jJYCxPNVRVXFQeu1XKlok6oO0=
 github.com/knadh/koanf/maps v0.1.2 h1:RBfmAW5CnZT+PJ1CVc1QSJKf4Xu9kxfQgYVQSu8hpbo=
@@ -451,8 +451,8 @@ go.opentelemetry.io/contrib/propagators/ot v1.45.0 h1:BLFjHG1OjCEDaBk4os2+X1D6/u
 go.opentelemetry.io/contrib/propagators/ot v1.45.0/go.mod h1:mGksO7kOmOSsRGbVA28x7kHNL4YrH5uJoTNuws70NDU=
 go.opentelemetry.io/contrib/zpages v0.70.0 h1:uBcclHekIrCRLO4KZfXiebDcWB52QQXaHGgvhUJ1K5I=
 go.opentelemetry.io/contrib/zpages v0.70.0/go.mod h1:Nz9A1+68HVoJrk+cg92zJbcbHFAa+Jbl1uINwAlcK94=
-go.opentelemetry.io/ebpf-profiler v0.0.202627 h1:P677YJWd/B05cpVfZGRWRLqGulflDLrie5SCFgG+ovs=
-go.opentelemetry.io/ebpf-profiler v0.0.202627/go.mod h1:z9PU0ofPdmn4O4jSUsajgrZFUx6IX3AV2XOdawqY65Y=
+go.opentelemetry.io/ebpf-profiler v0.0.202632 h1:CogE7a2G+6S4+949vN2dZNTM0qU4UBr+Hgx27LHPxHo=
+go.opentelemetry.io/ebpf-profiler v0.0.202632/go.mod h1:pdYPF2WfZh24GOpi3qvuvp4SIh85dOKTmq/ZBXKhy3g=
 go.opentelemetry.io/otel v1.45.0 h1:pdrWmLHofpubmArBv1LgFSv1Z0Ie/ppdZzu+kUN5EeU=
 go.opentelemetry.io/otel v1.45.0/go.mod h1:XZxIqPapzEYnhNSScF5DIqXhm/rYi0FzCe2XddAwZfQ=
 go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc v0.21.0 h1:WseeVYf5dJZTsyPiyW5L14k5qsSibqXAMTSiFEDiWr0=
