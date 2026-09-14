@@ -4,6 +4,8 @@
 package awscloudwatchreceiver
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -33,6 +35,25 @@ type fakeHost struct {
 }
 
 func (h *fakeHost) GetExtensions() map[component.ID]component.Component { return h.extensions }
+
+// stubSTSEndpoint points the AWS SDK's STS client at a local test server that answers
+// GetCallerIdentity. ensureSession resolves the account ID via STS; without a reachable
+// endpoint that call fails and the receiver has no account ID to report.
+func stubSTSEndpoint(t *testing.T, accountID string) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/xml")
+		_, _ = w.Write([]byte(`<GetCallerIdentityResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/">
+  <GetCallerIdentityResult>
+    <Arn>arn:aws:iam::` + accountID + `:user/test</Arn>
+    <UserId>AKIAI44QH8DHBEXAMPLE</UserId>
+    <Account>` + accountID + `</Account>
+  </GetCallerIdentityResult>
+  <ResponseMetadata><RequestId>test-request-id</RequestId></ResponseMetadata>
+</GetCallerIdentityResponse>`))
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("AWS_ENDPOINT_URL_STS", srv.URL)
+}
 
 func TestResolveCredentialsProvider(t *testing.T) {
 	provID := component.MustNewID("awscredentialsprovider")
@@ -95,6 +116,8 @@ func TestMetricsScraperUsesCredentialsProvider(t *testing.T) {
 }
 
 func TestLogsReceiverUsesCredentialsProvider(t *testing.T) {
+	stubSTSEndpoint(t, "123456789012")
+
 	provID := component.MustNewID("awscredentialsprovider")
 	host := &fakeHost{extensions: map[component.ID]component.Component{
 		provID: &fakeCredentialsProvider{creds: credentials.NewStaticCredentialsProvider("AKID", "SECRET", "")},
@@ -112,6 +135,7 @@ func TestLogsReceiverUsesCredentialsProvider(t *testing.T) {
 	require.NoError(t, rcvr.Start(t.Context(), host))
 	require.NoError(t, rcvr.ensureSession())
 	require.NotNil(t, rcvr.client)
+	require.Equal(t, "123456789012", rcvr.accountID)
 
 	creds, err := rcvr.credsProvider.Retrieve(t.Context())
 	require.NoError(t, err)
