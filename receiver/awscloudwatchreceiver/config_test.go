@@ -420,9 +420,10 @@ func TestLoadMetricsConfig(t *testing.T) {
 					Period:           300 * time.Second,
 					Delay:            defaultMetricsDelay,
 					Discovery: &MetricsDiscoveryConfig{
-						Filters: configoptional.Some(MetricsDiscoveryFilters{Namespace: "AWS/EC2"}),
-						Limit:   100,
-						Stats:   []string{"Sum", "Average"},
+						Filters:        configoptional.Some(MetricsDiscoveryFilters{Namespace: "AWS/EC2"}),
+						Limit:          100,
+						Stats:          []string{"Sum", "Average"},
+						RecentlyActive: true,
 					},
 				},
 			},
@@ -513,6 +514,59 @@ func TestValidateMetricsConfig(t *testing.T) {
 				Discovery: &MetricsDiscoveryConfig{Limit: 0},
 			}),
 			expectedErr: errInvalidDiscoveryLimit,
+		},
+		{
+			name: "account identifiers without linked accounts",
+			config: withMetrics(MetricsConfig{
+				Period: 300 * time.Second,
+				Discovery: &MetricsDiscoveryConfig{
+					Limit:              100,
+					AccountIdentifiers: []string{"111111111111"},
+				},
+			}),
+			expectedErr: errAccountIdentifiersWithoutLinked,
+		},
+		{
+			name: "account identifiers with linked accounts valid",
+			config: withMetrics(MetricsConfig{
+				Period: 300 * time.Second,
+				Discovery: &MetricsDiscoveryConfig{
+					Limit:                 100,
+					IncludeLinkedAccounts: aws.Bool(true),
+					AccountIdentifiers:    []string{"111111111111"},
+				},
+			}),
+		},
+		{
+			name: "malformed account identifier",
+			config: withMetrics(MetricsConfig{
+				Period: 300 * time.Second,
+				Discovery: &MetricsDiscoveryConfig{
+					Limit:                 100,
+					IncludeLinkedAccounts: aws.Bool(true),
+					AccountIdentifiers:    []string{"11111111111"}, // 11 digits
+				},
+			}),
+			expectedErr: errInvalidAccountID,
+		},
+		{
+			name: "malformed query account_id",
+			config: withMetrics(MetricsConfig{
+				Period: 300 * time.Second,
+				Queries: []MetricQuery{
+					{Namespace: "AWS/EC2", MetricName: "CPUUtilization", AccountID: "not-an-account"},
+				},
+			}),
+			expectedErr: errInvalidAccountID,
+		},
+		{
+			name: "valid query account_id",
+			config: withMetrics(MetricsConfig{
+				Period: 300 * time.Second,
+				Queries: []MetricQuery{
+					{Namespace: "AWS/EC2", MetricName: "CPUUtilization", AccountID: "222222222222"},
+				},
+			}),
 		},
 		{
 			name: "collection interval too short",
