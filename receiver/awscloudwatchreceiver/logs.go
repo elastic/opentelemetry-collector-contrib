@@ -43,6 +43,8 @@ type logsReceiver struct {
 	region                        string
 	profile                       string
 	imdsEndpoint                  string
+	credentialsProviderID         *component.ID
+	credsProvider                 aws.CredentialsProvider
 	pollInterval                  time.Duration
 	delay                         time.Duration
 	maxEventsPerRequest           int
@@ -161,25 +163,32 @@ func newLogsReceiver(cfg *Config, settings receiver.Settings, consumer consumer.
 	}
 
 	return &logsReceiver{
-		settings:            settings,
-		region:              cfg.Region,
-		profile:             cfg.Profile,
-		consumer:            consumer,
-		maxEventsPerRequest: cfg.Logs.MaxEventsPerRequest,
-		imdsEndpoint:        cfg.IMDSEndpoint,
-		autodiscover:        autodiscover,
-		pollInterval:        cfg.Logs.PollInterval,
-		delay:               cfg.Logs.Delay,
-		initialStartTime:    startTime,
-		groupNextStartTimes: map[string]time.Time{},
-		groupRequests:       groups,
-		wg:                  &sync.WaitGroup{},
-		storageID:           cfg.StorageID,
-		k8sLeaderElector:    cfg.K8sLeaderElector,
+		settings:              settings,
+		region:                cfg.Region,
+		profile:               cfg.Profile,
+		consumer:              consumer,
+		maxEventsPerRequest:   cfg.Logs.MaxEventsPerRequest,
+		imdsEndpoint:          cfg.IMDSEndpoint,
+		credentialsProviderID: cfg.CredentialsProvider,
+		autodiscover:          autodiscover,
+		pollInterval:          cfg.Logs.PollInterval,
+		delay:                 cfg.Logs.Delay,
+		initialStartTime:      startTime,
+		groupNextStartTimes:   map[string]time.Time{},
+		groupRequests:         groups,
+		wg:                    &sync.WaitGroup{},
+		storageID:             cfg.StorageID,
+		k8sLeaderElector:      cfg.K8sLeaderElector,
 	}
 }
 
 func (l *logsReceiver) Start(ctx context.Context, host component.Host) error {
+	creds, err := resolveCredentialsProvider(host, l.credentialsProviderID)
+	if err != nil {
+		return err
+	}
+	l.credsProvider = creds
+
 	if l.cloudwatchCheckpointPersister == nil {
 		storageClient, err := adapter.GetStorageClient(ctx, host, l.storageID, l.settings.ID)
 		if err != nil {
@@ -586,6 +595,12 @@ func (l *logsReceiver) ensureSession() error {
 	}
 
 	cfg, err := config.LoadDefaultConfig(context.Background(), cfgOptions...)
+	if err != nil {
+		return err
+	}
+	if l.credsProvider != nil {
+		cfg.Credentials = l.credsProvider
+	}
 	l.client = cloudwatchlogs.NewFromConfig(cfg)
 
 	stsClient := sts.NewFromConfig(cfg)
@@ -596,5 +611,5 @@ func (l *logsReceiver) ensureSession() error {
 		l.accountID = aws.ToString(stsResult.Account)
 	}
 
-	return err
+	return nil
 }
